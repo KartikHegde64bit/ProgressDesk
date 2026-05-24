@@ -30,6 +30,37 @@ COLORS = {
 }
 
 
+def draw_rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
+    radius = min(radius, (x2 - x1) / 2, (y2 - y1) / 2)
+    points = (
+        x1 + radius,
+        y1,
+        x2 - radius,
+        y1,
+        x2,
+        y1,
+        x2,
+        y1 + radius,
+        x2,
+        y2 - radius,
+        x2,
+        y2,
+        x2 - radius,
+        y2,
+        x1 + radius,
+        y2,
+        x1,
+        y2,
+        x1,
+        y2 - radius,
+        x1,
+        y1 + radius,
+        x1,
+        y1,
+    )
+    canvas.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
+
+
 def enable_dpi_awareness():
     if sys.platform != "win32":
         return
@@ -252,35 +283,220 @@ class RoundedButton(tk.Canvas):
         height = max(1, self.winfo_height() or self.button_height)
         bg = self.active_bg if self.is_hovered else self.bg_color
         fg = self.active_fg if self.is_hovered else self.fg_color
-        radius = min(self.radius, (width - 2) / 2, (height - 2) / 2)
-        points = (
-            1 + radius,
-            1,
-            width - 1 - radius,
-            1,
-            width - 1,
-            1,
-            width - 1,
-            1 + radius,
-            width - 1,
-            height - 1 - radius,
-            width - 1,
-            height - 1,
-            width - 1 - radius,
-            height - 1,
-            1 + radius,
-            height - 1,
-            1,
-            height - 1,
-            1,
-            height - 1 - radius,
-            1,
-            1 + radius,
-            1,
-            1,
-        )
-        self.create_polygon(points, smooth=True, splinesteps=12, fill=bg, outline="")
+        draw_rounded_rect(self, 1, 1, width - 1, height - 1, self.radius, fill=bg, outline="")
         self.create_text(width / 2, height / 2, text=self.text, fill=fg, font=self.font)
+
+
+class RoundedFrame(tk.Canvas):
+    def __init__(self, parent, bg, parent_bg=None, border=None, radius=8, padx=0, pady=0):
+        self.fill = bg
+        self.border = border
+        self.radius = radius
+        self.padx = padx
+        self.pady = pady
+        super().__init__(
+            parent,
+            bg=parent_bg or parent.cget("bg"),
+            bd=0,
+            highlightthickness=0,
+        )
+        self.content = tk.Frame(self, bg=bg)
+        self.content_window = self.create_window(
+            self.padx,
+            self.pady,
+            window=self.content,
+            anchor="nw",
+        )
+        self.bind("<Configure>", lambda _event: self._draw(), add="+")
+        self.content.bind("<Configure>", lambda _event: self._sync_size(), add="+")
+
+    def _sync_size(self):
+        width = self.content.winfo_reqwidth() + (self.padx * 2)
+        height = self.content.winfo_reqheight() + (self.pady * 2)
+        self.configure(width=width, height=height)
+        self._draw()
+
+    def _draw(self):
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        self.delete("shape")
+        outline = self.border or self.fill
+        draw_rounded_rect(
+            self,
+            1,
+            1,
+            width - 1,
+            height - 1,
+            self.radius,
+            fill=self.fill,
+            outline=outline,
+            tags="shape",
+        )
+        self.tag_lower("shape")
+        self.itemconfigure(
+            self.content_window,
+            width=max(1, width - (self.padx * 2)),
+            height=max(1, height - (self.pady * 2)),
+        )
+
+
+class RoundedLabel(tk.Canvas):
+    def __init__(self, parent, text="", bg=COLORS["surface"], fg=COLORS["text"], font=("Segoe UI", 10), padx=16, pady=11, radius=8):
+        self.text = text
+        self.fill = bg
+        self.fg = fg
+        self.text_font = font
+        self.padx = padx
+        self.pady = pady
+        self.radius = radius
+        metrics_font = tkfont.Font(font=font)
+        width = metrics_font.measure(text or " ") + (padx * 2)
+        height = metrics_font.metrics("linespace") + (pady * 2)
+        super().__init__(
+            parent,
+            width=width,
+            height=height,
+            bg=parent.cget("bg"),
+            bd=0,
+            highlightthickness=0,
+        )
+        self.bind("<Configure>", lambda _event: self._draw(), add="+")
+        self._draw()
+
+    def configure(self, cnf=None, **kwargs):
+        options = dict(cnf or {})
+        options.update(kwargs)
+        for key in ("text", "bg", "fg", "font"):
+            if key in options:
+                value = options.pop(key)
+                if key == "text":
+                    self.text = value
+                elif key == "bg":
+                    self.fill = value
+                elif key == "fg":
+                    self.fg = value
+                elif key == "font":
+                    self.text_font = value
+        if options:
+            super().configure(**options)
+        self._draw()
+
+    config = configure
+
+    def _draw(self):
+        self.delete("all")
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        draw_rounded_rect(self, 1, 1, width - 1, height - 1, self.radius, fill=self.fill, outline="")
+        self.create_text(self.padx, height / 2, text=self.text, fill=self.fg, font=self.text_font, anchor="w")
+
+
+class RoundedEntry(tk.Canvas):
+    def __init__(self, parent, textvariable, radius=8, width=240):
+        self.radius = radius
+        super().__init__(
+            parent,
+            width=width,
+            height=38,
+            bg=parent.cget("bg"),
+            bd=0,
+            highlightthickness=0,
+        )
+        self.entry = tk.Entry(
+            self,
+            textvariable=textvariable,
+            bd=0,
+            relief="flat",
+            highlightthickness=0,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 10),
+        )
+        self.entry_window = self.create_window(14, 19, window=self.entry, anchor="w")
+        self.bind("<Configure>", lambda _event: self._draw(), add="+")
+        self._draw()
+
+    def _draw(self):
+        self.delete("shape")
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        draw_rounded_rect(
+            self,
+            1,
+            1,
+            width - 1,
+            height - 1,
+            self.radius,
+            fill=COLORS["surface"],
+            outline=COLORS["line"],
+            tags="shape",
+        )
+        self.tag_lower("shape")
+        self.coords(self.entry_window, 14, height / 2)
+        self.itemconfigure(self.entry_window, width=max(1, width - 28))
+
+    def insert(self, *args):
+        return self.entry.insert(*args)
+
+    def get(self):
+        return self.entry.get()
+
+    def focus_set(self):
+        return self.entry.focus_set()
+
+
+class RoundedText(tk.Canvas):
+    def __init__(self, parent, height=4, width=36, radius=8):
+        self.radius = radius
+        text_font = tkfont.Font(font=("Segoe UI", 10))
+        pixel_width = text_font.measure("0" * width) + 28
+        pixel_height = (text_font.metrics("linespace") * height) + 18
+        super().__init__(
+            parent,
+            width=pixel_width,
+            height=pixel_height,
+            bg=parent.cget("bg"),
+            bd=0,
+            highlightthickness=0,
+        )
+        self.text = tk.Text(
+            self,
+            height=height,
+            width=width,
+            bd=0,
+            relief="flat",
+            highlightthickness=0,
+            bg="#fbfaf7",
+            fg=COLORS["text"],
+            font=("Segoe UI", 10),
+        )
+        self.text_window = self.create_window(12, 9, window=self.text, anchor="nw")
+        self.bind("<Configure>", lambda _event: self._draw(), add="+")
+        self._draw()
+
+    def _draw(self):
+        self.delete("shape")
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        draw_rounded_rect(
+            self,
+            1,
+            1,
+            width - 1,
+            height - 1,
+            self.radius,
+            fill="#fbfaf7",
+            outline=COLORS["line"],
+            tags="shape",
+        )
+        self.tag_lower("shape")
+        self.itemconfigure(self.text_window, width=max(1, width - 24), height=max(1, height - 18))
+
+    def insert(self, *args):
+        return self.text.insert(*args)
+
+    def get(self, *args):
+        return self.text.get(*args)
 
 
 class TaskStore:
@@ -345,8 +561,9 @@ class TaskDialog(tk.Toplevel):
         self.after(50, lambda: self.title_entry.focus_set())
 
     def build(self):
-        body = tk.Frame(self, bg=COLORS["surface"], padx=24, pady=22)
-        body.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+        shell = RoundedFrame(self, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=24, pady=22)
+        shell.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+        body = shell.content
 
         tk.Label(
             body,
@@ -378,16 +595,11 @@ class TaskDialog(tk.Toplevel):
         tk.Label(body, text="Notes", bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
             row=11, column=0, sticky="w", pady=(12, 4)
         )
-        self.notes_text = tk.Text(
+        self.notes_text = RoundedText(
             body,
             height=4,
             width=36,
-            bd=1,
-            relief="solid",
-            highlightthickness=0,
-            bg="#fbfaf7",
-            fg=COLORS["text"],
-            font=("Segoe UI", 10),
+            radius=8,
         )
         self.notes_text.grid(row=12, column=0, columnspan=2, sticky="ew")
         if self.task:
@@ -402,16 +614,11 @@ class TaskDialog(tk.Toplevel):
         tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
             row=row, column=column, sticky="w", pady=(12, 4), padx=(0 if column == 0 else 12, 0)
         )
-        entry = tk.Entry(
+        entry = RoundedEntry(
             parent,
             textvariable=variable,
-            width=width,
-            bd=1,
-            relief="solid",
-            highlightthickness=0,
-            bg="#fbfaf7",
-            fg=COLORS["text"],
-            font=("Segoe UI", 10),
+            width=max(120, width * 9),
+            radius=8,
         )
         entry.grid(
             row=row + 1,
@@ -546,17 +753,8 @@ class ProgressDesk(tk.Tk):
         controls = tk.Frame(self, bg=COLORS["bg"], padx=28)
         controls.pack(fill="x", pady=(0, 12))
 
-        self.search_entry = tk.Entry(
-            controls,
-            textvariable=self.search_var,
-            bd=1,
-            relief="solid",
-            highlightthickness=0,
-            bg=COLORS["surface"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 10),
-        )
-        self.search_entry.pack(side="left", fill="x", expand=True, ipady=8)
+        self.search_entry = RoundedEntry(controls, self.search_var, radius=8)
+        self.search_entry.pack(side="left", fill="x", expand=True)
         self.search_entry.insert(0, "")
         self.search_var.trace_add("write", lambda *_: self.render())
 
@@ -583,14 +781,14 @@ class ProgressDesk(tk.Tk):
         stats.pack(fill="x", pady=(0, 14))
         self.stats_labels = []
         for _ in range(4):
-            label = tk.Label(
+            label = RoundedLabel(
                 stats,
                 bg=COLORS["surface"],
                 fg=COLORS["text"],
                 padx=16,
                 pady=11,
                 font=("Segoe UI", 10, "bold"),
-                anchor="w",
+                radius=8,
             )
             label.pack(side="left", fill="x", expand=True, padx=(0, 10))
             self.stats_labels.append(label)
@@ -770,10 +968,11 @@ class ProgressDesk(tk.Tk):
         self.text_button(empty, "Add item", self.open_add_dialog).pack()
 
     def task_card(self, parent, task):
-        card = tk.Frame(parent, bg=COLORS["surface"], padx=18, pady=16, highlightthickness=1, highlightbackground=COLORS["line"])
-        card.grid_columnconfigure(0, weight=1)
+        card = RoundedFrame(parent, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=16)
+        body = card.content
+        body.grid_columnconfigure(0, weight=1)
 
-        top = tk.Frame(card, bg=COLORS["surface"])
+        top = tk.Frame(body, bg=COLORS["surface"])
         top.grid(row=0, column=0, sticky="ew")
         top.grid_columnconfigure(0, weight=1)
         tk.Label(
@@ -786,7 +985,7 @@ class ProgressDesk(tk.Tk):
             wraplength=340,
             justify="left",
         ).grid(row=0, column=0, sticky="w")
-        tk.Label(
+        RoundedLabel(
             top,
             text=task.category,
             bg=COLORS["accent_2"],
@@ -794,9 +993,10 @@ class ProgressDesk(tk.Tk):
             padx=9,
             pady=3,
             font=("Segoe UI", 8, "bold"),
+            radius=8,
         ).grid(row=0, column=1, sticky="e")
 
-        progress_row = tk.Frame(card, bg=COLORS["surface"])
+        progress_row = tk.Frame(body, bg=COLORS["surface"])
         progress_row.grid(row=1, column=0, sticky="ew", pady=(14, 5))
         progress_row.grid_columnconfigure(0, weight=1)
         progressbar = ttk.Progressbar(
@@ -815,7 +1015,7 @@ class ProgressDesk(tk.Tk):
         )
         percent_label.grid(row=0, column=1, padx=(10, 0))
 
-        meta = tk.Frame(card, bg=COLORS["surface"])
+        meta = tk.Frame(body, bg=COLORS["surface"])
         meta.grid(row=2, column=0, sticky="ew", pady=(6, 12))
         tk.Label(
             meta,
@@ -835,7 +1035,7 @@ class ProgressDesk(tk.Tk):
 
         if task.notes:
             tk.Label(
-                card,
+                body,
                 text=task.notes,
                 bg=COLORS["surface"],
                 fg=COLORS["muted"],
@@ -845,7 +1045,7 @@ class ProgressDesk(tk.Tk):
                 anchor="w",
             ).grid(row=3, column=0, sticky="ew", pady=(0, 12))
 
-        actions = tk.Frame(card, bg=COLORS["surface"])
+        actions = tk.Frame(body, bg=COLORS["surface"])
         actions.grid(row=4, column=0, sticky="ew")
         self.small_button(actions, "-1", lambda tid=task.id: self.bump(tid, -1)).pack(side="left")
         self.small_button(actions, "+1", lambda tid=task.id: self.bump(tid, 1)).pack(side="left", padx=(6, 0))

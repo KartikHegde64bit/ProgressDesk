@@ -1200,62 +1200,20 @@ class ProgressDesk(tk.Tk):
         utility_filters = ("Complete",)
 
         for label in primary_filters:
-            button = RoundedButton(
-                sidebar,
-                text=label,
-                command=lambda value=label: self.set_filter(value),
-                bg=COLORS["surface_2"],
-                fg=COLORS["text"],
-                activebackground=COLORS["line"],
-                activeforeground=COLORS["text"],
-                width=164,
-                padx=14,
-                pady=9,
-                font=("Segoe UI", 10, "bold"),
-                radius=8,
-            )
+            button = self.filter_button(sidebar, label)
             button.pack(fill="x", pady=(0, 8))
-            setattr(self, f"filter_{label}", button)
 
         tk.Frame(sidebar, bg=COLORS["line"], height=1).pack(fill="x", pady=(6, 12))
 
         for label in secondary_filters:
-            button = RoundedButton(
-                sidebar,
-                text=label,
-                command=lambda value=label: self.set_filter(value),
-                bg=COLORS["surface_2"],
-                fg=COLORS["text"],
-                activebackground=COLORS["line"],
-                activeforeground=COLORS["text"],
-                width=164,
-                padx=14,
-                pady=9,
-                font=("Segoe UI", 10, "bold"),
-                radius=8,
-            )
+            button = self.filter_button(sidebar, label)
             button.pack(fill="x", pady=(0, 8))
-            setattr(self, f"filter_{label}", button)
 
         tk.Frame(sidebar, bg=COLORS["surface"], height=8).pack(fill="x", expand=True)
 
         for label in utility_filters:
-            button = RoundedButton(
-                sidebar,
-                text=label,
-                command=lambda value=label: self.set_filter(value),
-                bg=COLORS["surface_2"],
-                fg=COLORS["text"],
-                activebackground=COLORS["line"],
-                activeforeground=COLORS["text"],
-                width=164,
-                padx=14,
-                pady=9,
-                font=("Segoe UI", 10, "bold"),
-                radius=8,
-            )
+            button = self.filter_button(sidebar, label)
             button.pack(fill="x")
-            setattr(self, f"filter_{label}", button)
 
         main = tk.Frame(body, bg=COLORS["bg"])
         main.pack(side="left", fill="both", expand=True)
@@ -1296,6 +1254,24 @@ class ProgressDesk(tk.Tk):
         self.list_frame.bind("<Configure>", lambda _event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self.resize_list_window)
         self.canvas.bind_all("<MouseWheel>", self.on_mouse_wheel)
+
+    def filter_button(self, parent, label):
+        button = RoundedButton(
+            parent,
+            text=label,
+            command=lambda value=label: self.set_filter(value),
+            bg=COLORS["surface_2"],
+            fg=COLORS["text"],
+            activebackground=COLORS["line"],
+            activeforeground=COLORS["text"],
+            width=164,
+            padx=14,
+            pady=9,
+            font=("Segoe UI", 10, "bold"),
+            radius=8,
+        )
+        setattr(self, f"filter_{label}", button)
+        return button
 
     def icon_button(self, parent, text, command, tooltip, filled=False):
         button = RoundedButton(

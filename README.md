@@ -4,7 +4,7 @@ A small Windows desktop app for tracking progress across learning goals, watchli
 
 ## Run
 
-Double-click `run.bat` or `ProgressDesk.pyw` for the app-style launcher without a terminal window. For debugging, run:
+Double-click `ProgressDesk.bat` or `ProgressDesk.pyw` for the app-style launcher without a terminal window. For debugging, run:
 
 ```powershell
 python task_tracker.py
@@ -12,10 +12,15 @@ python task_tracker.py
 
 ## What It Tracks
 
+- A Current tab for items you have started or made progress on.
+- A To Watch tab for untouched movie and series items.
 - Progress as completed units out of total units.
 - Remaining time based on the estimated hours you enter.
 - Active time spent with a start/pause timer.
 - Categories for Learning, Series, Movies, Reading, and Custom goals.
+- A one-time movie and series watchlist seed that adds missing items without duplicating existing ones.
+- Optional Windows startup launch from the in-app Settings window.
+- A shutdown prompt that can cancel shutdown so you can review your progress first.
 
 Your data is stored locally at:
 

@@ -2,6 +2,7 @@ import json
 import math
 import sys
 import uuid
+import ctypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,49 @@ from tkinter import ttk
 
 APP_DIR = Path.home() / "AppData" / "Local" / "ProgressDesk"
 DATA_FILE = APP_DIR / "tasks.json"
-CATEGORY_FILTERS = ("All", "Learning", "Series", "Movies", "Reading", "Custom", "Complete")
+SETTINGS_FILE = APP_DIR / "settings.json"
+ICON_FILE = Path(__file__).with_name("assets") / "progressdesk_icon.png"
+CURRENT_FILTER = "Current"
+WATCHLIST_FILTER = "To Watch"
+CATEGORY_FILTERS = (CURRENT_FILTER, WATCHLIST_FILTER, "Movies", "Series", "Learning", "Reading", "Custom", "Complete")
+STARTUP_APP_NAME = "ProgressDesk"
+DEFAULT_SETTINGS = {
+    "start_on_windows_startup": True,
+    "personal_watchlist_seeded": False,
+}
+
+WATCHLIST_ITEMS = (
+    ("Jojo Rabbit", "Movies", 1, 0, "movies", 0, ""),
+    ("Bugonia", "Movies", 1, 0, "movies", 0, ""),
+    ("Obsession", "Movies", 1, 0, "movies", 0, ""),
+    ("Send Help", "Movies", 1, 0, "movies", 0, ""),
+    ("Exit 8", "Movies", 1, 0, "movies", 0, ""),
+    ("The Bone Temple", "Movies", 1, 0, "movies", 0, ""),
+    ("Hokum", "Movies", 1, 0, "movies", 0, ""),
+    ("We Bury the Dead", "Movies", 1, 0, "movies", 0, ""),
+    ("Primate", "Movies", 1, 0, "movies", 0, ""),
+    ("Undertone", "Movies", 1, 0, "movies", 0, ""),
+    ("War and Peace (1966)", "Movies", 1, 0, "movies", 0, ""),
+    ("Behind Her Eyes", "Movies", 1, 0, "movies", 0, ""),
+    ("The Fall", "Movies", 1, 0, "movies", 0, ""),
+    ("Revenge (2007)", "Movies", 1, 0, "movies", 0, ""),
+    ("City of God", "Movies", 1, 1, "movies", 0, "Watched."),
+    ("Warrior", "Movies", 1, 0, "movies", 0, "Tom Hardy."),
+    ("Big Fish", "Movies", 1, 0, "movies", 0, ""),
+    ("Ex Machina", "Movies", 1, 0, "movies", 0, ""),
+    ("Sisu", "Movies", 1, 0, "movies", 0, "2022 Finnish movie."),
+    ("Requiem for a Dream", "Movies", 1, 0, "movies", 0, ""),
+    ("Dancer in the Dark", "Movies", 1, 0, "movies", 0, ""),
+    ("I Spit on Your Grave", "Movies", 1, 0, "movies", 0, ""),
+    ("Iratta", "Movies", 1, 0, "movies", 0, ""),
+    ("No Mercy", "Movies", 1, 0, "movies", 0, "Korean."),
+    ("Sorcerer", "Movies", 1, 0, "movies", 0, ""),
+    ("Widow's Bay", "Series", 10, 0, "episodes", 0, ""),
+    ("Devs", "Series", 8, 0, "episodes", 0, ""),
+    ("From", "Series", 10, 0, "episodes", 0, ""),
+    ("1899", "Series", 8, 0, "episodes", 0, ""),
+    ("The Peripheral", "Series", 8, 0, "episodes", 0, ""),
+)
 
 
 COLORS = {
@@ -142,6 +185,15 @@ class Task:
     def is_complete(self):
         return self.completed_units >= self.total_units
 
+    def is_to_watch(self):
+        return (
+            self.category in ("Movies", "Series")
+            and not self.is_complete()
+            and self.completed_units == 0
+            and self.spent_seconds == 0
+            and self.timer_started_at is None
+        )
+
     def sync_completion_state(self):
         if self.is_complete():
             if self.is_running():
@@ -183,6 +235,10 @@ def format_duration(seconds):
     return "0m"
 
 
+def normalized_title(title):
+    return " ".join(title.strip().lower().split())
+
+
 def category_defaults(category):
     values = {
         "Learning": ("parts", 5),
@@ -192,6 +248,93 @@ def category_defaults(category):
         "Custom": ("steps", 5),
     }
     return values.get(category, values["Custom"])
+
+
+def load_settings():
+    settings = dict(DEFAULT_SETTINGS)
+    if not SETTINGS_FILE.exists():
+        return settings
+    try:
+        raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError):
+        return settings
+    if isinstance(raw, dict):
+        settings.update({key: raw[key] for key in DEFAULT_SETTINGS.keys() & raw.keys()})
+    return settings
+
+
+def save_settings(settings):
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    payload = dict(DEFAULT_SETTINGS)
+    payload.update(settings)
+    SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+class WindowsStartup:
+    RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    @staticmethod
+    def is_supported():
+        return sys.platform == "win32"
+
+    @staticmethod
+    def command():
+        launcher = Path(__file__).with_name("ProgressDesk.pyw")
+        executable = Path(sys.executable)
+        if executable.name.lower() == "python.exe":
+            pythonw = executable.with_name("pythonw.exe")
+            if pythonw.exists():
+                executable = pythonw
+        return f'"{executable}" "{launcher}" --startup'
+
+    @classmethod
+    def read_entry(cls):
+        if not cls.is_supported():
+            return None
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls.RUN_KEY, 0, winreg.KEY_READ) as key:
+                value, _value_type = winreg.QueryValueEx(key, STARTUP_APP_NAME)
+                return value
+        except (FileNotFoundError, OSError):
+            return None
+
+    @classmethod
+    def is_enabled(cls):
+        return cls.read_entry() == cls.command()
+
+    @classmethod
+    def enable(cls):
+        if not cls.is_supported():
+            return False
+        try:
+            import winreg
+
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cls.RUN_KEY) as key:
+                winreg.SetValueEx(key, STARTUP_APP_NAME, 0, winreg.REG_SZ, cls.command())
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def disable(cls):
+        if not cls.is_supported():
+            return False
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls.RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, STARTUP_APP_NAME)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def sync(cls, enabled):
+        return cls.enable() if enabled else cls.disable()
 
 
 class RoundedButton(tk.Canvas):
@@ -392,8 +535,9 @@ class RoundedLabel(tk.Canvas):
 
 
 class RoundedEntry(tk.Canvas):
-    def __init__(self, parent, textvariable, radius=8, width=240):
+    def __init__(self, parent, textvariable, radius=8, width=240, placeholder=""):
         self.radius = radius
+        self.placeholder = placeholder
         super().__init__(
             parent,
             width=width,
@@ -413,8 +557,22 @@ class RoundedEntry(tk.Canvas):
             font=("Segoe UI", 10),
         )
         self.entry_window = self.create_window(14, 19, window=self.entry, anchor="w")
+        self.placeholder_id = self.create_text(
+            14,
+            19,
+            text=self.placeholder,
+            fill=COLORS["muted"],
+            font=("Segoe UI", 10),
+            anchor="w",
+            state="hidden",
+        )
+        self.bind("<Button-1>", lambda _event: self.focus_set(), add="+")
+        self.entry.bind("<FocusIn>", lambda _event: self.refresh_placeholder(), add="+")
+        self.entry.bind("<FocusOut>", lambda _event: self.refresh_placeholder(), add="+")
+        textvariable.trace_add("write", lambda *_: self.refresh_placeholder())
         self.bind("<Configure>", lambda _event: self._draw(), add="+")
         self._draw()
+        self.refresh_placeholder()
 
     def _draw(self):
         self.delete("shape")
@@ -433,7 +591,15 @@ class RoundedEntry(tk.Canvas):
         )
         self.tag_lower("shape")
         self.coords(self.entry_window, 14, height / 2)
+        self.coords(self.placeholder_id, 14, height / 2)
         self.itemconfigure(self.entry_window, width=max(1, width - 28))
+        self.itemconfigure(self.placeholder_id, width=max(1, width - 28))
+
+    def refresh_placeholder(self):
+        has_text = bool(self.entry.get().strip())
+        is_focused = self.entry == self.focus_get()
+        state = "hidden" if has_text or is_focused or not self.placeholder else "normal"
+        self.itemconfigure(self.placeholder_id, state=state)
 
     def insert(self, *args):
         return self.entry.insert(*args)
@@ -523,6 +689,37 @@ class TaskStore:
     def add(self, task):
         self.tasks.insert(0, task)
         self.save()
+
+    def add_missing_watchlist_items(self, items):
+        existing = {
+            (normalized_title(task.title), task.category)
+            for task in self.tasks
+        }
+        new_tasks = []
+        for title, category, total_units, completed_units, unit_name, estimate_seconds, notes in items:
+            key = (normalized_title(title), category)
+            if key in existing:
+                continue
+            task = Task(
+                id=str(uuid.uuid4()),
+                title=title,
+                category=category,
+                total_units=total_units,
+                completed_units=completed_units,
+                unit_name=unit_name,
+                estimate_seconds=estimate_seconds,
+                spent_seconds=0,
+                timer_started_at=None,
+                notes=notes,
+                created_at=now_iso(),
+            )
+            task.sync_completion_state()
+            new_tasks.append(task)
+            existing.add(key)
+        if new_tasks:
+            self.tasks = new_tasks + self.tasks
+            self.save()
+        return len(new_tasks)
 
     def delete(self, task_id):
         self.tasks = [task for task in self.tasks if task.id != task_id]
@@ -678,6 +875,112 @@ class TaskDialog(tk.Toplevel):
         self.destroy()
 
 
+class SettingsDialog(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Settings")
+        self.configure(bg=COLORS["bg"])
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        self.status_var = tk.StringVar()
+        self.startup_button = None
+
+        self.build()
+        self.refresh()
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def build(self):
+        shell = RoundedFrame(self, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=24, pady=22)
+        shell.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+        body = shell.content
+
+        tk.Label(
+            body,
+            text="Settings",
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            body,
+            text="Windows startup",
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 11, "bold"),
+        ).grid(row=1, column=0, sticky="w", pady=(18, 4))
+        tk.Label(
+            body,
+            textvariable=self.status_var,
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10),
+            wraplength=380,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w")
+
+        actions = tk.Frame(body, bg=COLORS["surface"])
+        actions.grid(row=3, column=0, sticky="e", pady=(18, 0))
+        self.startup_button = RoundedButton(
+            actions,
+            text="",
+            command=self.toggle_startup,
+            bg=COLORS["accent"],
+            fg="#ffffff",
+            activebackground="#216957",
+            activeforeground="#ffffff",
+            padx=18,
+            pady=8,
+            font=("Segoe UI", 10, "bold"),
+            radius=8,
+        )
+        self.startup_button.pack(side="left", padx=(0, 8))
+        RoundedButton(
+            actions,
+            text="Close",
+            command=self.destroy,
+            bg=COLORS["surface_2"],
+            fg=COLORS["text"],
+            activebackground=COLORS["line"],
+            activeforeground=COLORS["text"],
+            padx=18,
+            pady=8,
+            font=("Segoe UI", 10, "bold"),
+            radius=8,
+        ).pack(side="left")
+
+    def refresh(self):
+        if not WindowsStartup.is_supported():
+            self.status_var.set("Startup control is only available on Windows.")
+            self.startup_button.configure(text="Unavailable", bg=COLORS["surface_2"], fg=COLORS["muted"])
+            return
+
+        enabled = WindowsStartup.is_enabled()
+        self.status_var.set(
+            "ProgressDesk opens automatically when you sign in to Windows."
+            if enabled
+            else "ProgressDesk does not open automatically when you sign in to Windows."
+        )
+        self.startup_button.configure(
+            text="Disable startup" if enabled else "Enable startup",
+            bg=COLORS["danger"] if enabled else COLORS["accent"],
+            fg="#ffffff",
+            activebackground="#963c3c" if enabled else "#216957",
+            activeforeground="#ffffff",
+        )
+
+    def toggle_startup(self):
+        enabled = WindowsStartup.is_enabled()
+        desired = not enabled
+        if not WindowsStartup.sync(desired):
+            messagebox.showerror("Startup setting", "Could not update the Windows startup setting.")
+            return
+        self.parent.settings["start_on_windows_startup"] = desired
+        save_settings(self.parent.settings)
+        self.refresh()
+
+
 class ProgressDesk(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -688,14 +991,31 @@ class ProgressDesk(tk.Tk):
         self.configure(bg=COLORS["bg"])
 
         self.store = TaskStore(DATA_FILE)
-        self.filter_var = tk.StringVar(value="All")
+        self.settings = load_settings()
+        self.seed_personal_watchlist()
+        self.filter_var = tk.StringVar(value=CURRENT_FILTER)
         self.search_var = tk.StringVar(value="")
         self.cards = {}
+        self.icon_image = None
+        self._shutdown_prompt_active = False
+        self._original_wndproc = None
+        self._wndproc_callback = None
 
         self.setup_styles()
+        self.setup_icon()
+        self.sync_startup_setting()
         self.build_layout()
+        self.protocol("WM_DELETE_WINDOW", self.close_app)
+        self.install_shutdown_prompt()
         self.render()
         self.tick()
+
+    def seed_personal_watchlist(self):
+        if self.settings.get("personal_watchlist_seeded"):
+            return
+        self.store.add_missing_watchlist_items(WATCHLIST_ITEMS)
+        self.settings["personal_watchlist_seeded"] = True
+        save_settings(self.settings)
 
     def configure_fonts(self):
         base_font = tkfont.nametofont("TkDefaultFont")
@@ -726,6 +1046,106 @@ class ProgressDesk(tk.Tk):
             thickness=9,
         )
 
+    def setup_icon(self):
+        if not ICON_FILE.exists():
+            return
+        try:
+            self.icon_image = tk.PhotoImage(file=str(ICON_FILE))
+            self.iconphoto(True, self.icon_image)
+        except tk.TclError:
+            self.icon_image = None
+
+    def sync_startup_setting(self):
+        if not WindowsStartup.is_supported():
+            return
+        desired = bool(self.settings.get("start_on_windows_startup", True))
+        WindowsStartup.sync(desired)
+
+    def install_shutdown_prompt(self):
+        if sys.platform != "win32":
+            return
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hwnd = wintypes.HWND(self.winfo_id())
+        gwlp_wndproc = -4
+        wm_queryendsession = 0x0011
+        wm_endsession = 0x0016
+
+        wndproc_type = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
+
+        try:
+            set_window_long = user32.SetWindowLongPtrW
+        except AttributeError:
+            set_window_long = user32.SetWindowLongW
+        set_window_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        set_window_long.restype = ctypes.c_ssize_t
+        user32.CallWindowProcW.argtypes = [
+            ctypes.c_ssize_t,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.CallWindowProcW.restype = ctypes.c_ssize_t
+
+        def wndproc(window, message, wparam, lparam):
+            if message == wm_queryendsession:
+                return self.handle_shutdown_query(window)
+            if message == wm_endsession and int(wparam):
+                self.store.save()
+            if not self._original_wndproc:
+                return user32.DefWindowProcW(window, message, wparam, lparam)
+            return user32.CallWindowProcW(self._original_wndproc, window, message, wparam, lparam)
+
+        self._wndproc_callback = wndproc_type(wndproc)
+        self._original_wndproc = set_window_long(
+            hwnd,
+            gwlp_wndproc,
+            ctypes.cast(self._wndproc_callback, ctypes.c_void_p).value,
+        )
+        if not self._original_wndproc:
+            self._wndproc_callback = None
+
+    def handle_shutdown_query(self, hwnd):
+        if self._shutdown_prompt_active:
+            return 1
+        self._shutdown_prompt_active = True
+        self.store.save()
+
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.update()
+        except tk.TclError:
+            pass
+
+        user32 = ctypes.windll.user32
+        mb_yesno = 0x00000004
+        mb_iconquestion = 0x00000020
+        mb_systemmodal = 0x00001000
+        id_yes = 6
+        result = user32.MessageBoxW(
+            hwnd,
+            "Windows is shutting down. Do you want to review ProgressDesk before shutdown?\n\n"
+            "Choose Yes to cancel shutdown and keep ProgressDesk open. Choose No to continue shutdown.",
+            "ProgressDesk",
+            mb_yesno | mb_iconquestion | mb_systemmodal,
+        )
+        self._shutdown_prompt_active = False
+        return 0 if result == id_yes else 1
+
+    def close_app(self):
+        self.store.save()
+        self.destroy()
+
     def build_layout(self):
         header = tk.Frame(self, bg=COLORS["bg"], padx=28, pady=24)
         header.pack(fill="x")
@@ -749,35 +1169,105 @@ class ProgressDesk(tk.Tk):
 
         self.add_button = self.icon_button(header, "+", self.open_add_dialog, "Add item", filled=True)
         self.add_button.pack(side="right", padx=(12, 0))
+        self.settings_button = self.icon_button(header, "S", self.open_settings, "Settings")
+        self.settings_button.pack(side="right")
 
-        controls = tk.Frame(self, bg=COLORS["bg"], padx=28)
-        controls.pack(fill="x", pady=(0, 12))
+        body = tk.Frame(self, bg=COLORS["bg"], padx=28, pady=4)
+        body.pack(fill="both", expand=True)
 
-        self.search_entry = RoundedEntry(controls, self.search_var, radius=8)
-        self.search_entry.pack(side="left", fill="x", expand=True)
-        self.search_entry.insert(0, "")
-        self.search_var.trace_add("write", lambda *_: self.render())
+        sidebar_shell = RoundedFrame(
+            body,
+            bg=COLORS["surface"],
+            parent_bg=COLORS["bg"],
+            border=COLORS["line"],
+            radius=8,
+            padx=16,
+            pady=16,
+        )
+        sidebar_shell.pack(side="left", fill="y", padx=(0, 18))
+        sidebar = sidebar_shell.content
 
-        filters = tk.Frame(controls, bg=COLORS["bg"])
-        filters.pack(side="left", padx=(14, 0))
-        for label in CATEGORY_FILTERS:
+        tk.Label(
+            sidebar,
+            text="Views",
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 12))
+
+        primary_filters = (CURRENT_FILTER, WATCHLIST_FILTER, "Movies", "Series")
+        secondary_filters = ("Learning", "Reading", "Custom")
+        utility_filters = ("Complete",)
+
+        for label in primary_filters:
             button = RoundedButton(
-                filters,
+                sidebar,
                 text=label,
                 command=lambda value=label: self.set_filter(value),
                 bg=COLORS["surface_2"],
                 fg=COLORS["text"],
                 activebackground=COLORS["line"],
                 activeforeground=COLORS["text"],
-                padx=10,
-                pady=8,
-                font=("Segoe UI", 9, "bold"),
+                width=164,
+                padx=14,
+                pady=9,
+                font=("Segoe UI", 10, "bold"),
                 radius=8,
             )
-            button.pack(side="left", padx=2)
+            button.pack(fill="x", pady=(0, 8))
             setattr(self, f"filter_{label}", button)
 
-        stats = tk.Frame(self, bg=COLORS["bg"], padx=28)
+        tk.Frame(sidebar, bg=COLORS["line"], height=1).pack(fill="x", pady=(6, 12))
+
+        for label in secondary_filters:
+            button = RoundedButton(
+                sidebar,
+                text=label,
+                command=lambda value=label: self.set_filter(value),
+                bg=COLORS["surface_2"],
+                fg=COLORS["text"],
+                activebackground=COLORS["line"],
+                activeforeground=COLORS["text"],
+                width=164,
+                padx=14,
+                pady=9,
+                font=("Segoe UI", 10, "bold"),
+                radius=8,
+            )
+            button.pack(fill="x", pady=(0, 8))
+            setattr(self, f"filter_{label}", button)
+
+        tk.Frame(sidebar, bg=COLORS["surface"], height=8).pack(fill="x", expand=True)
+
+        for label in utility_filters:
+            button = RoundedButton(
+                sidebar,
+                text=label,
+                command=lambda value=label: self.set_filter(value),
+                bg=COLORS["surface_2"],
+                fg=COLORS["text"],
+                activebackground=COLORS["line"],
+                activeforeground=COLORS["text"],
+                width=164,
+                padx=14,
+                pady=9,
+                font=("Segoe UI", 10, "bold"),
+                radius=8,
+            )
+            button.pack(fill="x")
+            setattr(self, f"filter_{label}", button)
+
+        main = tk.Frame(body, bg=COLORS["bg"])
+        main.pack(side="left", fill="both", expand=True)
+
+        controls = tk.Frame(main, bg=COLORS["bg"])
+        controls.pack(fill="x", pady=(0, 12))
+
+        self.search_entry = RoundedEntry(controls, self.search_var, radius=8, placeholder="Search here")
+        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_var.trace_add("write", lambda *_: self.render())
+
+        stats = tk.Frame(main, bg=COLORS["bg"])
         stats.pack(fill="x", pady=(0, 14))
         self.stats_labels = []
         for _ in range(4):
@@ -793,7 +1283,7 @@ class ProgressDesk(tk.Tk):
             label.pack(side="left", fill="x", expand=True, padx=(0, 10))
             self.stats_labels.append(label)
 
-        outer = tk.Frame(self, bg=COLORS["bg"], padx=28)
+        outer = tk.Frame(main, bg=COLORS["bg"])
         outer.pack(fill="both", expand=True)
 
         self.canvas = tk.Canvas(outer, bg=COLORS["bg"], highlightthickness=0)
@@ -859,6 +1349,10 @@ class ProgressDesk(tk.Tk):
         self.filter_var.set(value)
         self.render()
 
+    def open_settings(self):
+        dialog = SettingsDialog(self)
+        self.wait_window(dialog)
+
     def open_add_dialog(self):
         dialog = TaskDialog(self)
         self.wait_window(dialog)
@@ -894,10 +1388,13 @@ class ProgressDesk(tk.Tk):
         tasks = self.store.tasks
         if selected == "Complete":
             tasks = [task for task in tasks if task.is_complete()]
+        elif selected == WATCHLIST_FILTER:
+            tasks = [task for task in tasks if task.is_to_watch()]
+        elif selected == CURRENT_FILTER:
+            tasks = [task for task in tasks if not task.is_complete() and not task.is_to_watch()]
         else:
-            tasks = [task for task in tasks if not task.is_complete()]
-        if selected not in ("All", "Complete"):
             tasks = [task for task in tasks if task.category == selected]
+            tasks = [task for task in tasks if not task.is_complete()]
         if query:
             tasks = [task for task in tasks if query in task.title.lower() or query in task.notes.lower()]
         return tasks
@@ -935,15 +1432,15 @@ class ProgressDesk(tk.Tk):
             )
 
     def render_stats(self):
-        total = sum(1 for task in self.store.tasks if not task.is_complete())
+        total = sum(1 for task in self.store.tasks if not task.is_complete() and not task.is_to_watch())
+        to_watch = sum(1 for task in self.store.tasks if task.is_to_watch())
         complete = sum(1 for task in self.store.tasks if task.is_complete())
         running = sum(1 for task in self.store.tasks if task.is_running())
-        remaining = sum((task.remaining_seconds() or 0) for task in self.store.tasks if not task.is_complete())
         values = (
-            f"{total} active item{'s' if total != 1 else ''}",
+            f"{total} current item{'s' if total != 1 else ''}",
+            f"{to_watch} to watch",
             f"{complete} complete",
             f"{running} timer{'s' if running != 1 else ''} running",
-            f"{format_duration(remaining)} estimated left",
         )
         for label, text in zip(self.stats_labels, values):
             label.configure(text=text)
@@ -951,16 +1448,25 @@ class ProgressDesk(tk.Tk):
     def render_empty(self):
         empty = tk.Frame(self.list_frame, bg=COLORS["bg"], pady=80)
         empty.grid(row=0, column=0, sticky="nsew")
+        selected = self.filter_var.get()
+        empty_text = "No items here yet"
+        detail_text = "Add a system design plan, series, movie list, reading goal, or any trackable project."
+        if selected == CURRENT_FILTER:
+            empty_text = "No current items"
+            detail_text = "Start an item from To Watch or add a new progress item."
+        elif selected == WATCHLIST_FILTER:
+            empty_text = "Nothing to watch yet"
+            detail_text = "Add movies or series here, then press Start when you begin."
         tk.Label(
             empty,
-            text="No items here yet",
+            text=empty_text,
             bg=COLORS["bg"],
             fg=COLORS["text"],
             font=("Segoe UI", 18, "bold"),
         ).pack()
         tk.Label(
             empty,
-            text="Add a system design plan, series, movie list, reading goal, or any trackable project.",
+            text=detail_text,
             bg=COLORS["bg"],
             fg=COLORS["muted"],
             font=("Segoe UI", 10),
@@ -1047,8 +1553,9 @@ class ProgressDesk(tk.Tk):
 
         actions = tk.Frame(body, bg=COLORS["surface"])
         actions.grid(row=4, column=0, sticky="ew")
-        self.small_button(actions, "-1", lambda tid=task.id: self.bump(tid, -1)).pack(side="left")
-        self.small_button(actions, "+1", lambda tid=task.id: self.bump(tid, 1)).pack(side="left", padx=(6, 0))
+        if task.total_units > 1:
+            self.small_button(actions, "-1", lambda tid=task.id: self.bump(tid, -1)).pack(side="left")
+            self.small_button(actions, "+1", lambda tid=task.id: self.bump(tid, 1)).pack(side="left", padx=(6, 0))
         if not task.is_complete():
             self.small_button(actions, "Complete", lambda tid=task.id: self.mark_complete(tid), accent=True).pack(
                 side="left", padx=(6, 0)

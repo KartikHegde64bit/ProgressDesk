@@ -12,6 +12,8 @@ python task_tracker.py
 
 ## What It Tracks
 
+- A left sidebar with Current, To Watch, Movies, Series, and other project views.
+- A search bar with a `Search here` placeholder for quick filtering.
 - A Current tab for items you have started or made progress on.
 - A To Watch tab for untouched movie and series items.
 - Progress as completed units out of total units.

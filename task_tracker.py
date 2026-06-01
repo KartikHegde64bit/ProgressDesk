@@ -1199,13 +1199,7 @@ class ProgressDesk(tk.Tk):
         secondary_filters = ("Learning", "Reading", "Custom")
         utility_filters = ("Complete",)
 
-        tk.Label(
-            sidebar,
-            text="Focus",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            font=("Segoe UI", 8, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
+        self.sidebar_label(sidebar, "Focus").pack(anchor="w", pady=(0, 10))
 
         for label in primary_filters:
             button = self.filter_button(sidebar, label)
@@ -1213,13 +1207,7 @@ class ProgressDesk(tk.Tk):
 
         tk.Frame(sidebar, bg=COLORS["line"], height=1).pack(fill="x", pady=(6, 12))
 
-        tk.Label(
-            sidebar,
-            text="Projects",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            font=("Segoe UI", 8, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
+        self.sidebar_label(sidebar, "Projects").pack(anchor="w", pady=(0, 10))
 
         for label in secondary_filters:
             button = self.filter_button(sidebar, label)
@@ -1227,13 +1215,7 @@ class ProgressDesk(tk.Tk):
 
         tk.Frame(sidebar, bg=COLORS["surface"], height=8).pack(fill="x", expand=True)
 
-        tk.Label(
-            sidebar,
-            text="History",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            font=("Segoe UI", 8, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
+        self.sidebar_label(sidebar, "History").pack(anchor="w", pady=(0, 10))
 
         for label in utility_filters:
             button = self.filter_button(sidebar, label)
@@ -1296,6 +1278,15 @@ class ProgressDesk(tk.Tk):
         )
         setattr(self, f"filter_{label}", button)
         return button
+
+    def sidebar_label(self, parent, text):
+        return tk.Label(
+            parent,
+            text=text,
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 8, "bold"),
+        )
 
     def icon_button(self, parent, text, command, tooltip, filled=False):
         button = RoundedButton(

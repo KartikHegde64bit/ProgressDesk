@@ -1199,17 +1199,41 @@ class ProgressDesk(tk.Tk):
         secondary_filters = ("Learning", "Reading", "Custom")
         utility_filters = ("Complete",)
 
+        tk.Label(
+            sidebar,
+            text="Focus",
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+
         for label in primary_filters:
             button = self.filter_button(sidebar, label)
             button.pack(fill="x", pady=(0, 8))
 
         tk.Frame(sidebar, bg=COLORS["line"], height=1).pack(fill="x", pady=(6, 12))
 
+        tk.Label(
+            sidebar,
+            text="Projects",
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+
         for label in secondary_filters:
             button = self.filter_button(sidebar, label)
             button.pack(fill="x", pady=(0, 8))
 
         tk.Frame(sidebar, bg=COLORS["surface"], height=8).pack(fill="x", expand=True)
+
+        tk.Label(
+            sidebar,
+            text="History",
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
         for label in utility_filters:
             button = self.filter_button(sidebar, label)

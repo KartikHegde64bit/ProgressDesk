@@ -1154,7 +1154,9 @@ class TaskSetDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Task set")
         self.configure(bg=COLORS["bg"])
-        self.resizable(False, False)
+        self.geometry("980x760")
+        self.minsize(860, 560)
+        self.resizable(True, True)
         self.result = None
         self.task_set = task_set
         self.task_rows = []
@@ -1173,6 +1175,8 @@ class TaskSetDialog(tk.Toplevel):
         self.end_time_var = tk.StringVar(value=end.strftime("%H:%M") if end else "")
         self.notes_text = None
         self.rows_frame = None
+        self.form_canvas = None
+        self.form_window = None
 
         self.build()
         existing_tasks = task_set.tasks if task_set else []
@@ -1184,9 +1188,33 @@ class TaskSetDialog(tk.Toplevel):
         self.after(50, lambda: self.title_entry.focus_set())
 
     def build(self):
-        shell = RoundedFrame(self, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=24, pady=22)
-        shell.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        form_shell = tk.Frame(self, bg=COLORS["bg"])
+        form_shell.grid(row=0, column=0, sticky="nsew")
+        form_shell.grid_rowconfigure(0, weight=1)
+        form_shell.grid_columnconfigure(0, weight=1)
+
+        self.form_canvas = tk.Canvas(form_shell, bg=COLORS["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(form_shell, orient="vertical", command=self.form_canvas.yview)
+        self.form_canvas.configure(yscrollcommand=scrollbar.set)
+        self.form_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        form_frame = tk.Frame(self.form_canvas, bg=COLORS["bg"])
+        self.form_window = self.form_canvas.create_window((0, 0), window=form_frame, anchor="nw")
+        form_frame.bind("<Configure>", lambda _event: self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all")))
+        self.form_canvas.bind("<Configure>", self.resize_form_canvas)
+        self.form_canvas.bind("<MouseWheel>", self.scroll_form)
+
+        shell = RoundedFrame(form_frame, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=24, pady=22)
+        shell.pack(fill="both", expand=True, padx=16, pady=16)
         body = shell.content
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0)
+        body.grid_columnconfigure(2, weight=1)
+        body.grid_columnconfigure(3, weight=0)
 
         tk.Label(
             body,
@@ -1194,19 +1222,19 @@ class TaskSetDialog(tk.Toplevel):
             bg=COLORS["surface"],
             fg=COLORS["text"],
             font=("Segoe UI", 16, "bold"),
-        ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 18))
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 18))
 
-        self.title_entry = self.field(body, "Task set name", self.title_var, 1, columnspan=6, width=58)
+        self.title_entry = self.field(body, "Task set name", self.title_var, 1, columnspan=4, width=82)
         self.date_field(body, "Start date", self.start_date_var, 3, 0)
-        self.time_field(body, "Start time", self.start_time_var, 3, 2)
-        self.date_field(body, "End date", self.end_date_var, 3, 3)
-        self.time_field(body, "End time", self.end_time_var, 3, 5)
+        self.time_field(body, "Start time", self.start_time_var, 3, 1)
+        self.date_field(body, "End date", self.end_date_var, 3, 2)
+        self.time_field(body, "End time", self.end_time_var, 3, 3)
 
         tk.Label(body, text="Tasks", bg=COLORS["surface"], fg=COLORS["text"], font=("Segoe UI", 11, "bold")).grid(
             row=5, column=0, sticky="w", pady=(18, 8)
         )
         self.rows_frame = tk.Frame(body, bg=COLORS["surface"])
-        self.rows_frame.grid(row=6, column=0, columnspan=6, sticky="ew")
+        self.rows_frame.grid(row=6, column=0, columnspan=4, sticky="ew")
 
         self.text_button(body, "Add task", self.add_task_row, secondary=True).grid(row=7, column=0, sticky="w", pady=(12, 0))
 
@@ -1214,14 +1242,28 @@ class TaskSetDialog(tk.Toplevel):
             row=8, column=0, sticky="w", pady=(14, 4)
         )
         self.notes_text = RoundedText(body, height=3, width=60, radius=8)
-        self.notes_text.grid(row=9, column=0, columnspan=6, sticky="ew")
+        self.notes_text.grid(row=9, column=0, columnspan=4, sticky="ew")
         if self.task_set:
             self.notes_text.insert("1.0", self.task_set.notes)
 
-        actions = tk.Frame(body, bg=COLORS["surface"])
-        actions.grid(row=10, column=0, columnspan=6, sticky="e", pady=(18, 0))
+        footer = tk.Frame(self, bg=COLORS["bg"], padx=16, pady=14)
+        footer.grid(row=1, column=0, sticky="ew")
+        actions = tk.Frame(footer, bg=COLORS["bg"])
+        actions.pack(side="right")
         self.text_button(actions, "Cancel", self.destroy, secondary=True).pack(side="left", padx=(0, 8))
         self.text_button(actions, "Save", self.submit).pack(side="left")
+        self.bind_scroll_events(form_frame)
+
+    def resize_form_canvas(self, event):
+        self.form_canvas.itemconfigure(self.form_window, width=event.width)
+
+    def scroll_form(self, event):
+        self.form_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def bind_scroll_events(self, widget):
+        widget.bind("<MouseWheel>", self.scroll_form, add="+")
+        for child in widget.winfo_children():
+            self.bind_scroll_events(child)
 
     def field(self, parent, label, variable, row, column=0, columnspan=1, width=18):
         tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
@@ -1239,11 +1281,11 @@ class TaskSetDialog(tk.Toplevel):
 
     def date_field(self, parent, label, variable, row, column):
         frame = tk.Frame(parent, bg=COLORS["surface"])
-        frame.grid(row=row + 1, column=column, columnspan=2, sticky="ew", padx=(0 if column == 0 else 10, 0))
+        frame.grid(row=row + 1, column=column, sticky="w", padx=(0 if column == 0 else 18, 0))
         tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
-            row=row, column=column, columnspan=2, sticky="w", pady=(14, 4), padx=(0 if column == 0 else 10, 0)
+            row=row, column=column, sticky="w", pady=(14, 4), padx=(0 if column == 0 else 18, 0)
         )
-        RoundedEntry(frame, textvariable=variable, width=112, radius=8, placeholder="YYYY-MM-DD").pack(side="left")
+        RoundedEntry(frame, textvariable=variable, width=150, radius=8, placeholder="YYYY-MM-DD").pack(side="left")
         RoundedButton(
             frame,
             "Cal",
@@ -1258,11 +1300,11 @@ class TaskSetDialog(tk.Toplevel):
 
     def time_field(self, parent, label, variable, row, column):
         tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
-            row=row, column=column, sticky="w", pady=(14, 4), padx=(10, 0)
+            row=row, column=column, sticky="w", pady=(14, 4), padx=(18, 0)
         )
         times = tuple(f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 30))
-        ttk.Combobox(parent, textvariable=variable, values=times, width=8).grid(
-            row=row + 1, column=column, sticky="w", padx=(10, 0)
+        ttk.Combobox(parent, textvariable=variable, values=times, width=9).grid(
+            row=row + 1, column=column, sticky="w", padx=(18, 0)
         )
 
     def pick_date(self, variable):
@@ -1344,6 +1386,7 @@ class TaskSetDialog(tk.Toplevel):
                 "notes": notes_var,
             }
         )
+        self.bind_scroll_events(row)
 
     def remove_task_row(self, frame):
         self.task_rows = [row for row in self.task_rows if row["frame"] != frame]

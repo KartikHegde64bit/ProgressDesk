@@ -3,8 +3,9 @@ import math
 import sys
 import uuid
 import ctypes
+import calendar
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
 import tkinter as tk
@@ -18,7 +19,18 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 ICON_FILE = Path(__file__).with_name("assets") / "progressdesk_icon.png"
 CURRENT_FILTER = "Current"
 WATCHLIST_FILTER = "To Watch"
-CATEGORY_FILTERS = (CURRENT_FILTER, WATCHLIST_FILTER, "Movies", "Series", "Learning", "Reading", "Custom", "Complete")
+TASKSETS_FILTER = "Task Sets"
+CATEGORY_FILTERS = (
+    CURRENT_FILTER,
+    TASKSETS_FILTER,
+    WATCHLIST_FILTER,
+    "Movies",
+    "Series",
+    "Learning",
+    "Reading",
+    "Custom",
+    "Complete",
+)
 STARTUP_APP_NAME = "ProgressDesk"
 DEFAULT_SETTINGS = {
     "start_on_windows_startup": True,
@@ -208,8 +220,128 @@ class Task:
         return self.timer_started_at is not None
 
 
+@dataclass
+class TaskSetTask:
+    id: str
+    title: str
+    category: str
+    total_units: int
+    completed_units: int
+    unit_name: str
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, data):
+        item = cls(
+            id=data.get("id", str(uuid.uuid4())),
+            title=data.get("title", "Untitled"),
+            category=data.get("category", "Learning"),
+            total_units=max(1, int(data.get("total_units", 1))),
+            completed_units=max(0, int(data.get("completed_units", 0))),
+            unit_name=data.get("unit_name", "parts"),
+            notes=data.get("notes", ""),
+        )
+        item.completed_units = min(item.completed_units, item.total_units)
+        return item
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "category": self.category,
+            "total_units": self.total_units,
+            "completed_units": min(self.completed_units, self.total_units),
+            "unit_name": self.unit_name,
+            "notes": self.notes,
+        }
+
+    def progress(self):
+        return min(1.0, self.completed_units / self.total_units)
+
+    def is_complete(self):
+        return self.completed_units >= self.total_units
+
+
+@dataclass
+class TaskSet:
+    id: str
+    title: str
+    start_at: str | None = None
+    end_at: str | None = None
+    tasks: list[TaskSetTask] = field(default_factory=list)
+    notes: str = ""
+    created_at: str = field(default_factory=lambda: now_iso())
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            title=data.get("title", "Untitled task set"),
+            start_at=data.get("start_at"),
+            end_at=data.get("end_at"),
+            tasks=[TaskSetTask.from_dict(item) for item in data.get("tasks", [])],
+            notes=data.get("notes", ""),
+            created_at=data.get("created_at", now_iso()),
+        )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "start_at": self.start_at,
+            "end_at": self.end_at,
+            "tasks": [task.to_dict() for task in self.tasks],
+            "notes": self.notes,
+            "created_at": self.created_at,
+        }
+
+    def task_progress(self):
+        if not self.tasks:
+            return 0.0
+        total = sum(task.total_units for task in self.tasks)
+        completed = sum(min(task.completed_units, task.total_units) for task in self.tasks)
+        return min(1.0, completed / max(1, total))
+
+    def complete_count(self):
+        return sum(1 for task in self.tasks if task.is_complete())
+
+    def time_progress(self):
+        start = parse_iso_datetime(self.start_at)
+        end = parse_iso_datetime(self.end_at)
+        if not start or not end or end <= start:
+            return None
+        now = datetime.now(timezone.utc)
+        return max(0.0, min(1.0, (now - start).total_seconds() / (end - start).total_seconds()))
+
+    def range_label(self):
+        start = format_datetime_label(self.start_at)
+        end = format_datetime_label(self.end_at)
+        if start and end:
+            return f"{start} to {end}"
+        if end:
+            return f"Due {end}"
+        if start:
+            return f"Starts {start}"
+        return "No time range"
+
+    def is_complete(self):
+        return bool(self.tasks) and all(task.is_complete() for task in self.tasks)
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_iso_datetime(iso_string):
+    if not iso_string:
+        return None
+    try:
+        value = datetime.fromisoformat(iso_string)
+    except (TypeError, ValueError):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def seconds_since(iso_string):
@@ -233,6 +365,33 @@ def format_duration(seconds):
     if minutes:
         return f"{minutes}m"
     return "0m"
+
+
+def format_datetime_label(iso_string):
+    value = parse_iso_datetime(iso_string)
+    if not value:
+        return ""
+    local_value = value.astimezone()
+    return local_value.strftime("%d %b %Y, %I:%M %p").lstrip("0")
+
+
+def format_percent(value):
+    if value is None:
+        return "Optional"
+    return f"{math.floor(value * 100)}%"
+
+
+def parse_date_time(date_text, time_text, default_time="00:00"):
+    date_text = date_text.strip()
+    time_text = time_text.strip()
+    if not date_text and not time_text:
+        return None
+    if not date_text:
+        raise ValueError("Date is required when a time is entered.")
+    if not time_text:
+        time_text = default_time
+    value = datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M")
+    return value.astimezone().isoformat()
 
 
 def normalized_title(title):
@@ -669,25 +828,40 @@ class TaskStore:
     def __init__(self, path):
         self.path = path
         self.tasks: list[Task] = []
+        self.task_sets: list[TaskSet] = []
         self.load()
 
     def load(self):
         if not self.path.exists():
             self.tasks = []
+            self.task_sets = []
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            self.tasks = [Task.from_dict(item) for item in raw]
+            if isinstance(raw, dict):
+                self.tasks = [Task.from_dict(item) for item in raw.get("tasks", [])]
+                self.task_sets = [TaskSet.from_dict(item) for item in raw.get("task_sets", [])]
+            else:
+                self.tasks = [Task.from_dict(item) for item in raw]
+                self.task_sets = []
         except (json.JSONDecodeError, OSError, TypeError):
             self.tasks = []
+            self.task_sets = []
 
     def save(self):
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        payload = [task.to_dict() for task in self.tasks]
+        payload = {
+            "tasks": [task.to_dict() for task in self.tasks],
+            "task_sets": [task_set.to_dict() for task_set in self.task_sets],
+        }
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def add(self, task):
         self.tasks.insert(0, task)
+        self.save()
+
+    def add_task_set(self, task_set):
+        self.task_sets.insert(0, task_set)
         self.save()
 
     def add_missing_watchlist_items(self, items):
@@ -725,8 +899,15 @@ class TaskStore:
         self.tasks = [task for task in self.tasks if task.id != task_id]
         self.save()
 
+    def delete_task_set(self, task_set_id):
+        self.task_sets = [task_set for task_set in self.task_sets if task_set.id != task_set_id]
+        self.save()
+
     def get(self, task_id):
         return next((task for task in self.tasks if task.id == task_id), None)
+
+    def get_task_set(self, task_set_id):
+        return next((task_set for task_set in self.task_sets if task_set.id == task_set_id), None)
 
 
 class TaskDialog(tk.Toplevel):
@@ -875,6 +1056,350 @@ class TaskDialog(tk.Toplevel):
         self.destroy()
 
 
+class DatePickerDialog(tk.Toplevel):
+    def __init__(self, parent, initial_text=""):
+        super().__init__(parent)
+        self.title("Choose date")
+        self.configure(bg=COLORS["bg"])
+        self.resizable(False, False)
+        self.result = None
+        self.transient(parent)
+        self.grab_set()
+
+        try:
+            initial = datetime.strptime(initial_text, "%Y-%m-%d").date()
+        except ValueError:
+            initial = date.today()
+        self.year = initial.year
+        self.month = initial.month
+        self.header_var = tk.StringVar()
+        self.days_frame = None
+
+        self.build()
+        self.render_days()
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def build(self):
+        shell = RoundedFrame(self, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=16)
+        shell.grid(row=0, column=0, padx=14, pady=14)
+        body = shell.content
+
+        nav = tk.Frame(body, bg=COLORS["surface"])
+        nav.grid(row=0, column=0, sticky="ew")
+        RoundedButton(nav, "<", self.previous_month, COLORS["surface_2"], COLORS["text"], width=34, height=30).pack(side="left")
+        tk.Label(
+            nav,
+            textvariable=self.header_var,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 11, "bold"),
+            width=18,
+        ).pack(side="left", padx=8)
+        RoundedButton(nav, ">", self.next_month, COLORS["surface_2"], COLORS["text"], width=34, height=30).pack(side="left")
+
+        self.days_frame = tk.Frame(body, bg=COLORS["surface"])
+        self.days_frame.grid(row=1, column=0, pady=(12, 0))
+
+    def previous_month(self):
+        self.month -= 1
+        if self.month < 1:
+            self.month = 12
+            self.year -= 1
+        self.render_days()
+
+    def next_month(self):
+        self.month += 1
+        if self.month > 12:
+            self.month = 1
+            self.year += 1
+        self.render_days()
+
+    def choose(self, day):
+        self.result = date(self.year, self.month, day).strftime("%Y-%m-%d")
+        self.destroy()
+
+    def render_days(self):
+        self.header_var.set(f"{calendar.month_name[self.month]} {self.year}")
+        for child in self.days_frame.winfo_children():
+            child.destroy()
+        for column, name in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
+            tk.Label(
+                self.days_frame,
+                text=name,
+                bg=COLORS["surface"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 8, "bold"),
+                width=4,
+            ).grid(row=0, column=column, pady=(0, 5))
+        for row, week in enumerate(calendar.monthcalendar(self.year, self.month), start=1):
+            for column, day in enumerate(week):
+                if day == 0:
+                    tk.Frame(self.days_frame, bg=COLORS["surface"], width=34, height=28).grid(row=row, column=column)
+                    continue
+                RoundedButton(
+                    self.days_frame,
+                    str(day),
+                    lambda value=day: self.choose(value),
+                    COLORS["surface_2"],
+                    COLORS["text"],
+                    activebackground=COLORS["line"],
+                    width=34,
+                    height=28,
+                    font=("Segoe UI", 9, "bold"),
+                ).grid(row=row, column=column, padx=2, pady=2)
+
+
+class TaskSetDialog(tk.Toplevel):
+    def __init__(self, parent, task_set=None):
+        super().__init__(parent)
+        self.title("Task set")
+        self.configure(bg=COLORS["bg"])
+        self.resizable(False, False)
+        self.result = None
+        self.task_set = task_set
+        self.task_rows = []
+
+        self.transient(parent)
+        self.grab_set()
+
+        self.title_var = tk.StringVar(value=task_set.title if task_set else "")
+        start = parse_iso_datetime(task_set.start_at) if task_set else None
+        end = parse_iso_datetime(task_set.end_at) if task_set else None
+        start = start.astimezone() if start else None
+        end = end.astimezone() if end else None
+        self.start_date_var = tk.StringVar(value=start.strftime("%Y-%m-%d") if start else "")
+        self.start_time_var = tk.StringVar(value=start.strftime("%H:%M") if start else "")
+        self.end_date_var = tk.StringVar(value=end.strftime("%Y-%m-%d") if end else "")
+        self.end_time_var = tk.StringVar(value=end.strftime("%H:%M") if end else "")
+        self.notes_text = None
+        self.rows_frame = None
+
+        self.build()
+        existing_tasks = task_set.tasks if task_set else []
+        for item in existing_tasks:
+            self.add_task_row(item)
+        if not existing_tasks:
+            self.add_task_row()
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.after(50, lambda: self.title_entry.focus_set())
+
+    def build(self):
+        shell = RoundedFrame(self, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=24, pady=22)
+        shell.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+        body = shell.content
+
+        tk.Label(
+            body,
+            text="New task set" if self.task_set is None else "Edit task set",
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 16, "bold"),
+        ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 18))
+
+        self.title_entry = self.field(body, "Task set name", self.title_var, 1, columnspan=6, width=58)
+        self.date_field(body, "Start date", self.start_date_var, 3, 0)
+        self.time_field(body, "Start time", self.start_time_var, 3, 2)
+        self.date_field(body, "End date", self.end_date_var, 3, 3)
+        self.time_field(body, "End time", self.end_time_var, 3, 5)
+
+        tk.Label(body, text="Tasks", bg=COLORS["surface"], fg=COLORS["text"], font=("Segoe UI", 11, "bold")).grid(
+            row=5, column=0, sticky="w", pady=(18, 8)
+        )
+        self.rows_frame = tk.Frame(body, bg=COLORS["surface"])
+        self.rows_frame.grid(row=6, column=0, columnspan=6, sticky="ew")
+
+        self.text_button(body, "Add task", self.add_task_row, secondary=True).grid(row=7, column=0, sticky="w", pady=(12, 0))
+
+        tk.Label(body, text="Notes", bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
+            row=8, column=0, sticky="w", pady=(14, 4)
+        )
+        self.notes_text = RoundedText(body, height=3, width=60, radius=8)
+        self.notes_text.grid(row=9, column=0, columnspan=6, sticky="ew")
+        if self.task_set:
+            self.notes_text.insert("1.0", self.task_set.notes)
+
+        actions = tk.Frame(body, bg=COLORS["surface"])
+        actions.grid(row=10, column=0, columnspan=6, sticky="e", pady=(18, 0))
+        self.text_button(actions, "Cancel", self.destroy, secondary=True).pack(side="left", padx=(0, 8))
+        self.text_button(actions, "Save", self.submit).pack(side="left")
+
+    def field(self, parent, label, variable, row, column=0, columnspan=1, width=18):
+        tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
+            row=row, column=column, columnspan=columnspan, sticky="w", pady=(0, 4), padx=(0 if column == 0 else 10, 0)
+        )
+        entry = RoundedEntry(parent, textvariable=variable, width=max(90, width * 9), radius=8)
+        entry.grid(
+            row=row + 1,
+            column=column,
+            columnspan=columnspan,
+            sticky="ew",
+            padx=(0 if column == 0 else 10, 0),
+        )
+        return entry
+
+    def date_field(self, parent, label, variable, row, column):
+        frame = tk.Frame(parent, bg=COLORS["surface"])
+        frame.grid(row=row + 1, column=column, columnspan=2, sticky="ew", padx=(0 if column == 0 else 10, 0))
+        tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
+            row=row, column=column, columnspan=2, sticky="w", pady=(14, 4), padx=(0 if column == 0 else 10, 0)
+        )
+        RoundedEntry(frame, textvariable=variable, width=112, radius=8, placeholder="YYYY-MM-DD").pack(side="left")
+        RoundedButton(
+            frame,
+            "Cal",
+            lambda var=variable: self.pick_date(var),
+            COLORS["surface_2"],
+            COLORS["text"],
+            activebackground=COLORS["line"],
+            width=42,
+            height=38,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(6, 0))
+
+    def time_field(self, parent, label, variable, row, column):
+        tk.Label(parent, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9)).grid(
+            row=row, column=column, sticky="w", pady=(14, 4), padx=(10, 0)
+        )
+        times = tuple(f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 30))
+        ttk.Combobox(parent, textvariable=variable, values=times, width=8).grid(
+            row=row + 1, column=column, sticky="w", padx=(10, 0)
+        )
+
+    def pick_date(self, variable):
+        dialog = DatePickerDialog(self, variable.get())
+        self.wait_window(dialog)
+        if dialog.result:
+            variable.set(dialog.result)
+
+    def text_button(self, parent, text, command, secondary=False):
+        bg = COLORS["surface_2"] if secondary else COLORS["accent"]
+        fg = COLORS["text"] if secondary else "#ffffff"
+        return RoundedButton(
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=fg,
+            activebackground=COLORS["line"] if secondary else "#216957",
+            activeforeground=fg,
+            padx=16,
+            pady=8,
+            font=("Segoe UI", 10, "bold"),
+            radius=8,
+        )
+
+    def add_task_row(self, item=None):
+        row_index = len(self.task_rows)
+        row = tk.Frame(self.rows_frame, bg=COLORS["surface"])
+        row.grid(row=row_index, column=0, sticky="ew", pady=(0, 8))
+        title_var = tk.StringVar(value=item.title if item else "")
+        category_var = tk.StringVar(value=item.category if item else "Learning")
+        default_unit, default_total = category_defaults(category_var.get())
+        total_var = tk.StringVar(value=str(item.total_units if item else default_total))
+        completed_var = tk.StringVar(value=str(item.completed_units if item else 0))
+        unit_var = tk.StringVar(value=item.unit_name if item else default_unit)
+        notes_var = tk.StringVar(value=item.notes if item else "")
+
+        RoundedEntry(row, title_var, width=180, radius=8, placeholder="Task").pack(side="left")
+        ttk.Combobox(
+            row,
+            textvariable=category_var,
+            values=("Learning", "Series", "Movies", "Reading", "Custom"),
+            state="readonly",
+            width=10,
+        ).pack(side="left", padx=(8, 0))
+        RoundedEntry(row, total_var, width=58, radius=8, placeholder="Total").pack(side="left", padx=(8, 0))
+        RoundedEntry(row, completed_var, width=76, radius=8, placeholder="Done").pack(side="left", padx=(8, 0))
+        RoundedEntry(row, unit_var, width=90, radius=8, placeholder="Unit").pack(side="left", padx=(8, 0))
+        RoundedEntry(row, notes_var, width=130, radius=8, placeholder="Notes").pack(side="left", padx=(8, 0))
+        RoundedButton(
+            row,
+            "X",
+            lambda frame=row: self.remove_task_row(frame),
+            COLORS["surface_2"],
+            COLORS["danger"],
+            activebackground=COLORS["line"],
+            width=34,
+            height=38,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(8, 0))
+
+        def apply_defaults(*_args):
+            unit_name, total_units = category_defaults(category_var.get())
+            if not unit_var.get().strip():
+                unit_var.set(unit_name)
+            if not total_var.get().strip():
+                total_var.set(str(total_units))
+
+        category_var.trace_add("write", apply_defaults)
+        self.task_rows.append(
+            {
+                "frame": row,
+                "id": item.id if item else str(uuid.uuid4()),
+                "title": title_var,
+                "category": category_var,
+                "total": total_var,
+                "completed": completed_var,
+                "unit": unit_var,
+                "notes": notes_var,
+            }
+        )
+
+    def remove_task_row(self, frame):
+        self.task_rows = [row for row in self.task_rows if row["frame"] != frame]
+        frame.destroy()
+
+    def submit(self):
+        title = self.title_var.get().strip()
+        if not title:
+            messagebox.showerror("Missing title", "Please enter a task set name.")
+            return
+        try:
+            start_at = parse_date_time(self.start_date_var.get(), self.start_time_var.get(), "00:00")
+            end_at = parse_date_time(self.end_date_var.get(), self.end_time_var.get(), "23:59")
+        except ValueError as error:
+            messagebox.showerror("Invalid range", str(error))
+            return
+        if start_at and end_at and parse_iso_datetime(end_at) <= parse_iso_datetime(start_at):
+            messagebox.showerror("Invalid range", "End date and time must be after the start.")
+            return
+
+        tasks = []
+        try:
+            for row in self.task_rows:
+                task_title = row["title"].get().strip()
+                if not task_title:
+                    continue
+                total_units = max(1, int(row["total"].get()))
+                completed_units = min(total_units, max(0, int(row["completed"].get() or 0)))
+                tasks.append(
+                    TaskSetTask(
+                        id=row["id"],
+                        title=task_title,
+                        category=row["category"].get(),
+                        total_units=total_units,
+                        completed_units=completed_units,
+                        unit_name=row["unit"].get().strip() or "steps",
+                        notes=row["notes"].get().strip(),
+                    )
+                )
+        except ValueError:
+            messagebox.showerror("Invalid tasks", "Task totals and completed values must be whole numbers.")
+            return
+        if not tasks:
+            messagebox.showerror("Missing tasks", "Add at least one task to this set.")
+            return
+
+        self.result = {
+            "title": title,
+            "start_at": start_at,
+            "end_at": end_at,
+            "tasks": tasks,
+            "notes": self.notes_text.get("1.0", "end").strip(),
+        }
+        self.destroy()
+
+
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -995,6 +1520,7 @@ class ProgressDesk(tk.Tk):
         self.seed_personal_watchlist()
         self.filter_var = tk.StringVar(value=CURRENT_FILTER)
         self.search_var = tk.StringVar(value="")
+        self.selected_task_set_id = None
         self.cards = {}
         self.icon_image = None
         self._shutdown_prompt_active = False
@@ -1195,7 +1721,7 @@ class ProgressDesk(tk.Tk):
             font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", pady=(0, 12))
 
-        primary_filters = (CURRENT_FILTER, WATCHLIST_FILTER, "Movies", "Series")
+        primary_filters = (CURRENT_FILTER, TASKSETS_FILTER, WATCHLIST_FILTER, "Movies", "Series")
         secondary_filters = ("Learning", "Reading", "Custom")
         utility_filters = ("Complete",)
 
@@ -1338,6 +1864,8 @@ class ProgressDesk(tk.Tk):
 
     def set_filter(self, value):
         self.filter_var.set(value)
+        if value != TASKSETS_FILTER:
+            self.selected_task_set_id = None
         self.render()
 
     def open_settings(self):
@@ -1345,6 +1873,9 @@ class ProgressDesk(tk.Tk):
         self.wait_window(dialog)
 
     def open_add_dialog(self):
+        if self.filter_var.get() == TASKSETS_FILTER:
+            self.open_task_set_dialog()
+            return
         dialog = TaskDialog(self)
         self.wait_window(dialog)
         if dialog.result:
@@ -1358,6 +1889,22 @@ class ProgressDesk(tk.Tk):
             task.sync_completion_state()
             self.store.add(task)
             self.render()
+
+    def open_task_set_dialog(self, task_set=None):
+        dialog = TaskSetDialog(self, task_set)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+        if task_set:
+            for key, value in dialog.result.items():
+                setattr(task_set, key, value)
+            self.store.save()
+        else:
+            task_set = TaskSet(id=str(uuid.uuid4()), created_at=now_iso(), **dialog.result)
+            self.store.add_task_set(task_set)
+            self.selected_task_set_id = task_set.id
+        self.filter_var.set(TASKSETS_FILTER)
+        self.render()
 
     def open_edit_dialog(self, task_id):
         task = self.store.get(task_id)
@@ -1390,12 +1937,29 @@ class ProgressDesk(tk.Tk):
             tasks = [task for task in tasks if query in task.title.lower() or query in task.notes.lower()]
         return tasks
 
+    def filtered_task_sets(self):
+        query = self.search_var.get().strip().lower()
+        task_sets = self.store.task_sets
+        if query:
+            task_sets = [
+                task_set
+                for task_set in task_sets
+                if query in task_set.title.lower()
+                or query in task_set.notes.lower()
+                or any(query in task.title.lower() or query in task.notes.lower() for task in task_set.tasks)
+            ]
+        return task_sets
+
     def render(self):
         self.update_filter_buttons()
         self.render_stats()
         for child in self.list_frame.winfo_children():
             child.destroy()
         self.cards.clear()
+
+        if self.filter_var.get() == TASKSETS_FILTER:
+            self.render_task_sets()
+            return
 
         tasks = self.filtered_tasks()
         if not tasks:
@@ -1409,6 +1973,24 @@ class ProgressDesk(tk.Tk):
             column = index % columns
             card.grid(row=row, column=column, sticky="nsew", padx=(0, 14), pady=(0, 14))
             self.list_frame.grid_columnconfigure(column, weight=1)
+
+    def render_task_sets(self):
+        if self.selected_task_set_id:
+            task_set = self.store.get_task_set(self.selected_task_set_id)
+            if task_set:
+                self.render_task_set_detail(task_set)
+                return
+            self.selected_task_set_id = None
+
+        task_sets = self.filtered_task_sets()
+        if not task_sets:
+            self.render_empty_task_sets()
+            return
+        columns = 2 if self.winfo_width() >= 940 else 1
+        for index, task_set in enumerate(task_sets):
+            card = self.task_set_card(self.list_frame, task_set)
+            card.grid(row=index // columns, column=index % columns, sticky="nsew", padx=(0, 14), pady=(0, 14))
+            self.list_frame.grid_columnconfigure(index % columns, weight=1)
 
     def update_filter_buttons(self):
         selected = self.filter_var.get()
@@ -1427,11 +2009,12 @@ class ProgressDesk(tk.Tk):
         to_watch = sum(1 for task in self.store.tasks if task.is_to_watch())
         complete = sum(1 for task in self.store.tasks if task.is_complete())
         running = sum(1 for task in self.store.tasks if task.is_running())
+        task_sets = len(self.store.task_sets)
         values = (
             f"{total} current item{'s' if total != 1 else ''}",
+            f"{task_sets} task set{'s' if task_sets != 1 else ''}",
             f"{to_watch} to watch",
-            f"{complete} complete",
-            f"{running} timer{'s' if running != 1 else ''} running",
+            f"{complete} complete, {running} timer{'s' if running != 1 else ''}",
         )
         for label, text in zip(self.stats_labels, values):
             label.configure(text=text)
@@ -1463,6 +2046,251 @@ class ProgressDesk(tk.Tk):
             font=("Segoe UI", 10),
         ).pack(pady=(6, 18))
         self.text_button(empty, "Add item", self.open_add_dialog).pack()
+
+    def render_empty_task_sets(self):
+        empty = tk.Frame(self.list_frame, bg=COLORS["bg"], pady=80)
+        empty.grid(row=0, column=0, sticky="nsew")
+        tk.Label(
+            empty,
+            text="No task sets yet",
+            bg=COLORS["bg"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 18, "bold"),
+        ).pack()
+        tk.Label(
+            empty,
+            text="Create a set for a deadline, weekend plan, or longer project range.",
+            bg=COLORS["bg"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10),
+        ).pack(pady=(6, 18))
+        self.text_button(empty, "Add task set", self.open_task_set_dialog).pack()
+
+    def task_set_card(self, parent, task_set):
+        card = RoundedFrame(parent, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=16)
+        body = card.content
+        body.grid_columnconfigure(0, weight=1)
+
+        top = tk.Frame(body, bg=COLORS["surface"])
+        top.grid(row=0, column=0, sticky="ew")
+        top.grid_columnconfigure(0, weight=1)
+        tk.Label(
+            top,
+            text=task_set.title,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 14, "bold"),
+            anchor="w",
+            wraplength=340,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+        RoundedLabel(
+            top,
+            text=f"{task_set.complete_count()}/{len(task_set.tasks)} tasks",
+            bg=COLORS["accent_2"],
+            fg=COLORS["accent"],
+            padx=9,
+            pady=3,
+            font=("Segoe UI", 8, "bold"),
+            radius=8,
+        ).grid(row=0, column=1, sticky="e")
+
+        self.progress_line(body, 1, "Tasks", task_set.task_progress())
+        self.progress_line(body, 2, "Time", task_set.time_progress())
+
+        tk.Label(
+            body,
+            text=task_set.range_label(),
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10),
+            anchor="w",
+            justify="left",
+            wraplength=420,
+        ).grid(row=3, column=0, sticky="ew", pady=(8, 12))
+
+        actions = tk.Frame(body, bg=COLORS["surface"])
+        actions.grid(row=4, column=0, sticky="ew")
+        self.small_button(actions, "Open", lambda tid=task_set.id: self.open_task_set_detail(tid), accent=True).pack(side="left")
+        self.small_button(actions, "Edit", lambda item=task_set: self.open_task_set_dialog(item)).pack(side="right", padx=(6, 0))
+        self.small_button(actions, "Delete", lambda tid=task_set.id: self.delete_task_set(tid), danger=True).pack(side="right")
+        return card
+
+    def progress_line(self, parent, row, label, value):
+        frame = tk.Frame(parent, bg=COLORS["surface"])
+        frame.grid(row=row, column=0, sticky="ew", pady=(14 if row == 1 else 8, 0))
+        frame.grid_columnconfigure(1, weight=1)
+        tk.Label(frame, text=label, bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9, "bold"), width=7, anchor="w").grid(
+            row=0, column=0, sticky="w"
+        )
+        progress = ttk.Progressbar(
+            frame,
+            style="Completed.Horizontal.TProgressbar" if value == 1 else "Horizontal.TProgressbar",
+            maximum=100,
+            value=(value or 0) * 100,
+        )
+        progress.grid(row=0, column=1, sticky="ew")
+        tk.Label(
+            frame,
+            text=format_percent(value),
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 9, "bold"),
+            width=8,
+            anchor="e",
+        ).grid(row=0, column=2, padx=(10, 0))
+
+    def open_task_set_detail(self, task_set_id):
+        self.selected_task_set_id = task_set_id
+        self.filter_var.set(TASKSETS_FILTER)
+        self.render()
+
+    def render_task_set_detail(self, task_set):
+        header = tk.Frame(self.list_frame, bg=COLORS["bg"])
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        header.grid_columnconfigure(0, weight=1)
+        self.small_button(header, "< Back", self.close_task_set_detail).grid(row=0, column=0, sticky="w")
+        self.small_button(header, "Edit set", lambda item=task_set: self.open_task_set_dialog(item)).grid(row=0, column=1, padx=(8, 0))
+        self.small_button(header, "Delete set", lambda tid=task_set.id: self.delete_task_set(tid), danger=True).grid(row=0, column=2, padx=(8, 0))
+
+        summary = RoundedFrame(
+            self.list_frame,
+            bg=COLORS["surface"],
+            parent_bg=COLORS["bg"],
+            border=COLORS["line"],
+            radius=8,
+            padx=20,
+            pady=18,
+        )
+        summary.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        body = summary.content
+        body.grid_columnconfigure(0, weight=1)
+        tk.Label(
+            body,
+            text=task_set.title,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 18, "bold"),
+            anchor="w",
+            justify="left",
+            wraplength=760,
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            body,
+            text=task_set.range_label(),
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            font=("Segoe UI", 10),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        self.progress_line(body, 2, "Tasks", task_set.task_progress())
+        self.progress_line(body, 3, "Time", task_set.time_progress())
+        if task_set.notes:
+            tk.Label(
+                body,
+                text=task_set.notes,
+                bg=COLORS["surface"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 10),
+                anchor="w",
+                justify="left",
+                wraplength=760,
+            ).grid(row=4, column=0, sticky="ew", pady=(12, 0))
+
+        for index, task in enumerate(task_set.tasks, start=2):
+            card = self.task_set_task_card(self.list_frame, task_set, task)
+            card.grid(row=index, column=0, sticky="ew", pady=(0, 12))
+        self.list_frame.grid_columnconfigure(0, weight=1)
+
+    def close_task_set_detail(self):
+        self.selected_task_set_id = None
+        self.render()
+
+    def task_set_task_card(self, parent, task_set, task):
+        card = RoundedFrame(parent, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=15)
+        body = card.content
+        body.grid_columnconfigure(0, weight=1)
+        top = tk.Frame(body, bg=COLORS["surface"])
+        top.grid(row=0, column=0, sticky="ew")
+        top.grid_columnconfigure(0, weight=1)
+        tk.Label(
+            top,
+            text=task.title,
+            bg=COLORS["surface"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 13, "bold"),
+            anchor="w",
+            justify="left",
+            wraplength=640,
+        ).grid(row=0, column=0, sticky="w")
+        RoundedLabel(
+            top,
+            text=task.category,
+            bg=COLORS["accent_2"],
+            fg=COLORS["accent"],
+            padx=9,
+            pady=3,
+            font=("Segoe UI", 8, "bold"),
+            radius=8,
+        ).grid(row=0, column=1, sticky="e")
+        self.progress_line(body, 1, f"{task.completed_units}/{task.total_units}", task.progress())
+        if task.notes:
+            tk.Label(
+                body,
+                text=task.notes,
+                bg=COLORS["surface"],
+                fg=COLORS["muted"],
+                font=("Segoe UI", 9),
+                wraplength=720,
+                justify="left",
+                anchor="w",
+            ).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        actions = tk.Frame(body, bg=COLORS["surface"])
+        actions.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        if task.total_units > 1:
+            self.small_button(actions, "-1", lambda sid=task_set.id, tid=task.id: self.bump_task_set_task(sid, tid, -1)).pack(side="left")
+            self.small_button(actions, "+1", lambda sid=task_set.id, tid=task.id: self.bump_task_set_task(sid, tid, 1)).pack(
+                side="left", padx=(6, 0)
+            )
+        if not task.is_complete():
+            self.small_button(actions, "Complete", lambda sid=task_set.id, tid=task.id: self.complete_task_set_task(sid, tid), accent=True).pack(
+                side="left", padx=(6, 0)
+            )
+        return card
+
+    def bump_task_set_task(self, task_set_id, task_id, amount):
+        task_set = self.store.get_task_set(task_set_id)
+        if not task_set:
+            return
+        task = next((item for item in task_set.tasks if item.id == task_id), None)
+        if not task:
+            return
+        task.completed_units = max(0, min(task.total_units, task.completed_units + amount))
+        self.store.save()
+        self.render()
+
+    def complete_task_set_task(self, task_set_id, task_id):
+        task_set = self.store.get_task_set(task_set_id)
+        if not task_set:
+            return
+        task = next((item for item in task_set.tasks if item.id == task_id), None)
+        if not task:
+            return
+        task.completed_units = task.total_units
+        self.store.save()
+        self.render()
+
+    def delete_task_set(self, task_set_id):
+        task_set = self.store.get_task_set(task_set_id)
+        if not task_set:
+            return
+        confirmed = messagebox.askyesno("Delete task set", f"Delete '{task_set.title}'?")
+        if not confirmed:
+            return
+        self.store.delete_task_set(task_set_id)
+        if self.selected_task_set_id == task_set_id:
+            self.selected_task_set_id = None
+        self.render()
 
     def task_card(self, parent, task):
         card = RoundedFrame(parent, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=16)

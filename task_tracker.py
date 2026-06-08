@@ -1975,6 +1975,87 @@ class ProgressDesk(tk.Tk):
             return
         messagebox.showinfo("Export task set", f"Exported '{task_set.title}'.")
 
+    def import_task_sets(self):
+        paths = filedialog.askopenfilenames(
+            parent=self,
+            title="Import task set",
+            filetypes=(("JSON files", "*.json"), ("All files", "*.*")),
+        )
+        if not paths:
+            return
+
+        imported = []
+        try:
+            for path in paths:
+                imported.extend(self.read_task_sets_from_file(path))
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Import task set", str(error))
+            return
+
+        existing_ids = {task_set.id for task_set in self.store.task_sets}
+        for task_set in imported:
+            if task_set.id in existing_ids:
+                self.assign_new_task_set_ids(task_set)
+            existing_ids.add(task_set.id)
+            self.store.task_sets.insert(0, task_set)
+
+        self.store.save()
+        self.filter_var.set(TASKSETS_FILTER)
+        self.selected_task_set_id = imported[-1].id if len(imported) == 1 else None
+        self.render()
+        messagebox.showinfo(
+            "Import task set",
+            f"Imported {len(imported)} task set{'s' if len(imported) != 1 else ''}.",
+        )
+
+    def read_task_sets_from_file(self, path):
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Could not import '{Path(path).name}'. The file is not valid JSON.") from error
+
+        if isinstance(raw, dict) and "task_set" in raw:
+            raw_sets = [raw["task_set"]]
+        elif isinstance(raw, dict) and "task_sets" in raw:
+            raw_sets = raw["task_sets"]
+        elif isinstance(raw, dict):
+            raw_sets = [raw]
+        else:
+            raise ValueError(f"Could not import '{Path(path).name}'. Expected a task set JSON object.")
+
+        if not isinstance(raw_sets, list) or not raw_sets:
+            raise ValueError(f"Could not import '{Path(path).name}'. No task sets were found.")
+
+        task_sets = []
+        for item in raw_sets:
+            self.validate_task_set_payload(item, path)
+            task_sets.append(TaskSet.from_dict(item))
+        return task_sets
+
+    def validate_task_set_payload(self, item, path):
+        name = Path(path).name
+        if not isinstance(item, dict):
+            raise ValueError(f"Could not import '{name}'. Every task set must be a JSON object.")
+        if not str(item.get("title", "")).strip():
+            raise ValueError(f"Could not import '{name}'. A task set is missing a title.")
+        tasks = item.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError(f"Could not import '{name}'. '{item.get('title', 'Untitled')}' has no tasks.")
+        for task in tasks:
+            if not isinstance(task, dict) or not str(task.get("title", "")).strip():
+                raise ValueError(f"Could not import '{name}'. One task is missing a title.")
+            try:
+                int(task.get("total_units", 1))
+                int(task.get("completed_units", 0))
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Could not import '{name}'. Task totals must be whole numbers.") from error
+
+    def assign_new_task_set_ids(self, task_set):
+        task_set.id = str(uuid.uuid4())
+        task_set.created_at = now_iso()
+        for task in task_set.tasks:
+            task.id = str(uuid.uuid4())
+
     def safe_export_filename(self, title):
         safe = "".join(char.lower() if char.isalnum() else "-" for char in title)
         safe = "-".join(part for part in safe.split("-") if part)

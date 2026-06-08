@@ -7,7 +7,7 @@ import calendar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
@@ -1948,6 +1948,37 @@ class ProgressDesk(tk.Tk):
             self.selected_task_set_id = task_set.id
         self.filter_var.set(TASKSETS_FILTER)
         self.render()
+
+    def export_task_set(self, task_set_id):
+        task_set = self.store.get_task_set(task_set_id)
+        if not task_set:
+            return
+        filename = self.safe_export_filename(task_set.title)
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export task set",
+            initialfile=filename,
+            defaultextension=".json",
+            filetypes=(("JSON files", "*.json"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        payload = {
+            "format": "progressdesk-task-set",
+            "version": 1,
+            "task_set": task_set.to_dict(),
+        }
+        try:
+            Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError as error:
+            messagebox.showerror("Export task set", f"Could not export the task set.\n\n{error}")
+            return
+        messagebox.showinfo("Export task set", f"Exported '{task_set.title}'.")
+
+    def safe_export_filename(self, title):
+        safe = "".join(char.lower() if char.isalnum() else "-" for char in title)
+        safe = "-".join(part for part in safe.split("-") if part)
+        return f"{safe or 'task-set'}.json"
 
     def open_edit_dialog(self, task_id):
         task = self.store.get(task_id)

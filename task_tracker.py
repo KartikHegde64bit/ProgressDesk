@@ -2141,10 +2141,16 @@ class ProgressDesk(tk.Tk):
         if not task_sets:
             self.render_empty_task_sets()
             return
+
+        toolbar = tk.Frame(self.list_frame, bg=COLORS["bg"])
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        self.small_button(toolbar, "Import", self.import_task_sets, accent=True).pack(side="left")
+        self.small_button(toolbar, "Add task set", self.open_task_set_dialog).pack(side="left", padx=(8, 0))
+
         columns = 2 if self.winfo_width() >= 940 else 1
         for index, task_set in enumerate(task_sets):
             card = self.task_set_card(self.list_frame, task_set)
-            card.grid(row=index // columns, column=index % columns, sticky="nsew", padx=(0, 14), pady=(0, 14))
+            card.grid(row=(index // columns) + 1, column=index % columns, sticky="nsew", padx=(0, 14), pady=(0, 14))
             self.list_frame.grid_columnconfigure(index % columns, weight=1)
 
     def update_filter_buttons(self):
@@ -2219,7 +2225,10 @@ class ProgressDesk(tk.Tk):
             fg=COLORS["muted"],
             font=("Segoe UI", 10),
         ).pack(pady=(6, 18))
-        self.text_button(empty, "Add task set", self.open_task_set_dialog).pack()
+        actions = tk.Frame(empty, bg=COLORS["bg"])
+        actions.pack()
+        self.text_button(actions, "Add task set", self.open_task_set_dialog).pack(side="left", padx=(0, 8))
+        self.text_button(actions, "Import task set", self.import_task_sets).pack(side="left")
 
     def task_set_card(self, parent, task_set):
         card = RoundedFrame(parent, bg=COLORS["surface"], parent_bg=COLORS["bg"], border=COLORS["line"], radius=8, padx=18, pady=16)
@@ -2267,6 +2276,7 @@ class ProgressDesk(tk.Tk):
         actions = tk.Frame(body, bg=COLORS["surface"])
         actions.grid(row=4, column=0, sticky="ew")
         self.small_button(actions, "Open", lambda tid=task_set.id: self.open_task_set_detail(tid), accent=True).pack(side="left")
+        self.small_button(actions, "Export", lambda tid=task_set.id: self.export_task_set(tid)).pack(side="left", padx=(6, 0))
         self.small_button(actions, "Edit", lambda item=task_set: self.open_task_set_dialog(item)).pack(side="right", padx=(6, 0))
         self.small_button(actions, "Delete", lambda tid=task_set.id: self.delete_task_set(tid), danger=True).pack(side="right")
         return card
@@ -2305,8 +2315,10 @@ class ProgressDesk(tk.Tk):
         header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         header.grid_columnconfigure(0, weight=1)
         self.small_button(header, "< Back", self.close_task_set_detail).grid(row=0, column=0, sticky="w")
-        self.small_button(header, "Edit set", lambda item=task_set: self.open_task_set_dialog(item)).grid(row=0, column=1, padx=(8, 0))
-        self.small_button(header, "Delete set", lambda tid=task_set.id: self.delete_task_set(tid), danger=True).grid(row=0, column=2, padx=(8, 0))
+        self.small_button(header, "Import", self.import_task_sets).grid(row=0, column=1, padx=(8, 0))
+        self.small_button(header, "Export set", lambda tid=task_set.id: self.export_task_set(tid)).grid(row=0, column=2, padx=(8, 0))
+        self.small_button(header, "Edit set", lambda item=task_set: self.open_task_set_dialog(item)).grid(row=0, column=3, padx=(8, 0))
+        self.small_button(header, "Delete set", lambda tid=task_set.id: self.delete_task_set(tid), danger=True).grid(row=0, column=4, padx=(8, 0))
 
         summary = RoundedFrame(
             self.list_frame,

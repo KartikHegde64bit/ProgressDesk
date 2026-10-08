@@ -20,6 +20,7 @@ ICON_FILE = Path(__file__).with_name("assets") / "progressdesk_icon.png"
 CURRENT_FILTER = "Current"
 WATCHLIST_FILTER = "To Watch"
 TASKSETS_FILTER = "Task Sets"
+DROPPED_FILTER = "Dropped"
 CATEGORY_FILTERS = (
     CURRENT_FILTER,
     TASKSETS_FILTER,
@@ -30,6 +31,7 @@ CATEGORY_FILTERS = (
     "Reading",
     "Custom",
     "Complete",
+    DROPPED_FILTER,
 )
 STARTUP_APP_NAME = "ProgressDesk"
 DEFAULT_SETTINGS = {
@@ -144,6 +146,7 @@ class Task:
     notes: str = ""
     created_at: str = field(default_factory=lambda: now_iso())
     completed_at: str | None = None
+    dropped_at: str | None = None
 
     @classmethod
     def from_dict(cls, data):
@@ -160,6 +163,7 @@ class Task:
             notes=data.get("notes", ""),
             created_at=data.get("created_at", now_iso()),
             completed_at=data.get("completed_at"),
+            dropped_at=data.get("dropped_at"),
         )
         task.completed_units = min(task.completed_units, task.total_units)
         task.sync_completion_state()
@@ -179,6 +183,7 @@ class Task:
             "notes": self.notes,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
+            "dropped_at": self.dropped_at,
         }
 
     def current_spent_seconds(self):
@@ -199,12 +204,16 @@ class Task:
 
     def is_to_watch(self):
         return (
-            self.category in ("Movies", "Series")
+            not self.is_dropped()
+            and self.category in ("Movies", "Series")
             and not self.is_complete()
             and self.completed_units == 0
             and self.spent_seconds == 0
             and self.timer_started_at is None
         )
+
+    def is_dropped(self):
+        return self.dropped_at is not None
 
     def sync_completion_state(self):
         if self.is_complete():
@@ -218,6 +227,15 @@ class Task:
 
     def is_running(self):
         return self.timer_started_at is not None
+
+    def mark_dropped(self):
+        if self.is_running():
+            self.spent_seconds = self.current_spent_seconds()
+            self.timer_started_at = None
+        self.dropped_at = now_iso()
+
+    def revive(self):
+        self.dropped_at = None
 
 
 @dataclass
@@ -832,6 +850,18 @@ class TaskStore:
         self.load()
 
     def load(self):
+        try:
+            import db_store
+            tasks, task_sets = db_store.load_from_db(Task, TaskSet, TaskSetTask)
+            if tasks is not None:
+                self.tasks = tasks
+                self.task_sets = task_sets
+                print("Loaded data successfully from PostgreSQL.")
+                return
+        except ImportError:
+            pass
+
+        # Fallback to JSON
         if not self.path.exists():
             self.tasks = []
             self.task_sets = []
@@ -844,6 +874,7 @@ class TaskStore:
             else:
                 self.tasks = [Task.from_dict(item) for item in raw]
                 self.task_sets = []
+            print("Loaded data from local JSON fallback.")
         except (json.JSONDecodeError, OSError, TypeError):
             self.tasks = []
             self.task_sets = []
@@ -854,6 +885,18 @@ class TaskStore:
             "tasks": [task.to_dict() for task in self.tasks],
             "task_sets": [task_set.to_dict() for task_set in self.task_sets],
         }
+        
+        db_success = False
+        try:
+            import db_store
+            db_success = db_store.save_to_db(self.tasks, self.task_sets)
+        except ImportError:
+            pass
+
+        if not db_success:
+            print("PostgreSQL save failed or unavailable. Saving exclusively to JSON.")
+        
+        # Always save to JSON as backup / dual-path
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def add(self, task):
@@ -1766,7 +1809,7 @@ class ProgressDesk(tk.Tk):
 
         primary_filters = (CURRENT_FILTER, TASKSETS_FILTER, WATCHLIST_FILTER, "Movies", "Series")
         secondary_filters = ("Learning", "Reading", "Custom")
-        utility_filters = ("Complete",)
+        utility_filters = ("Complete", DROPPED_FILTER)
 
         self.sidebar_label(sidebar, "Focus").pack(anchor="w", pady=(0, 10))
 
@@ -2079,14 +2122,16 @@ class ProgressDesk(tk.Tk):
         selected = self.filter_var.get()
         query = self.search_var.get().strip().lower()
         tasks = self.store.tasks
-        if selected == "Complete":
-            tasks = [task for task in tasks if task.is_complete()]
+        if selected == DROPPED_FILTER:
+            tasks = [task for task in tasks if task.is_dropped()]
+        elif selected == "Complete":
+            tasks = [task for task in tasks if not task.is_dropped() and task.is_complete()]
         elif selected == WATCHLIST_FILTER:
             tasks = [task for task in tasks if task.is_to_watch()]
         elif selected == CURRENT_FILTER:
-            tasks = [task for task in tasks if not task.is_complete() and not task.is_to_watch()]
+            tasks = [task for task in tasks if not task.is_dropped() and not task.is_complete() and not task.is_to_watch()]
         else:
-            tasks = [task for task in tasks if task.category == selected]
+            tasks = [task for task in tasks if not task.is_dropped() and task.category == selected]
             tasks = [task for task in tasks if not task.is_complete()]
         if query:
             tasks = [task for task in tasks if query in task.title.lower() or query in task.notes.lower()]
@@ -2166,16 +2211,17 @@ class ProgressDesk(tk.Tk):
             )
 
     def render_stats(self):
-        total = sum(1 for task in self.store.tasks if not task.is_complete() and not task.is_to_watch())
+        total = sum(1 for task in self.store.tasks if not task.is_dropped() and not task.is_complete() and not task.is_to_watch())
         to_watch = sum(1 for task in self.store.tasks if task.is_to_watch())
-        complete = sum(1 for task in self.store.tasks if task.is_complete())
-        running = sum(1 for task in self.store.tasks if task.is_running())
+        complete = sum(1 for task in self.store.tasks if not task.is_dropped() and task.is_complete())
+        dropped = sum(1 for task in self.store.tasks if task.is_dropped())
+        running = sum(1 for task in self.store.tasks if not task.is_dropped() and task.is_running())
         task_sets = len(self.store.task_sets)
         values = (
             f"{total} current item{'s' if total != 1 else ''}",
             f"{task_sets} task set{'s' if task_sets != 1 else ''}",
             f"{to_watch} to watch",
-            f"{complete} complete, {running} timer{'s' if running != 1 else ''}",
+            f"{complete} complete, {dropped} dropped, {running} timer{'s' if running != 1 else ''}",
         )
         for label, text in zip(self.stats_labels, values):
             label.configure(text=text)
@@ -2192,6 +2238,9 @@ class ProgressDesk(tk.Tk):
         elif selected == WATCHLIST_FILTER:
             empty_text = "Nothing to watch yet"
             detail_text = "Add movies or series here, then press Start when you begin."
+        elif selected == DROPPED_FILTER:
+            empty_text = "No dropped items"
+            detail_text = "Dropped items land here, and you can revive them anytime."
         tk.Label(
             empty,
             text=empty_text,
@@ -2539,17 +2588,21 @@ class ProgressDesk(tk.Tk):
 
         actions = tk.Frame(body, bg=COLORS["surface"])
         actions.grid(row=4, column=0, sticky="ew")
-        if task.total_units > 1:
-            self.small_button(actions, "-1", lambda tid=task.id: self.bump(tid, -1)).pack(side="left")
-            self.small_button(actions, "+1", lambda tid=task.id: self.bump(tid, 1)).pack(side="left", padx=(6, 0))
-        if not task.is_complete():
-            self.small_button(actions, "Complete", lambda tid=task.id: self.mark_complete(tid), accent=True).pack(
-                side="left", padx=(6, 0)
+        if task.is_dropped():
+            self.small_button(actions, "Revive", lambda tid=task.id: self.revive_task(tid), accent=True).pack(side="left")
+        else:
+            if task.total_units > 1:
+                self.small_button(actions, "-1", lambda tid=task.id: self.bump(tid, -1)).pack(side="left")
+                self.small_button(actions, "+1", lambda tid=task.id: self.bump(tid, 1)).pack(side="left", padx=(6, 0))
+            if not task.is_complete():
+                self.small_button(actions, "Complete", lambda tid=task.id: self.mark_complete(tid), accent=True).pack(
+                    side="left", padx=(6, 0)
+                )
+            timer_text = "Pause" if task.is_running() else "Start"
+            self.small_button(actions, timer_text, lambda tid=task.id: self.toggle_timer(tid), accent=task.is_running()).pack(
+                side="left", padx=(10, 0)
             )
-        timer_text = "Pause" if task.is_running() else "Start"
-        self.small_button(actions, timer_text, lambda tid=task.id: self.toggle_timer(tid), accent=task.is_running()).pack(
-            side="left", padx=(10, 0)
-        )
+            self.small_button(actions, "Drop", lambda tid=task.id: self.drop_task(tid), danger=True).pack(side="left", padx=(10, 0))
         self.small_button(actions, "Edit", lambda tid=task.id: self.open_edit_dialog(tid)).pack(side="right", padx=(6, 0))
         self.small_button(actions, "Delete", lambda tid=task.id: self.delete_task(tid), danger=True).pack(side="right")
 
@@ -2625,6 +2678,29 @@ class ProgressDesk(tk.Tk):
         else:
             task.timer_started_at = now_iso()
         self.store.save()
+        self.render()
+
+    def drop_task(self, task_id):
+        task = self.store.get(task_id)
+        if not task or task.is_dropped():
+            return
+        confirmed = messagebox.askyesno("Drop item", f"Move '{task.title}' to Dropped?")
+        if not confirmed:
+            return
+        task.mark_dropped()
+        self.store.save()
+        self.filter_var.set(DROPPED_FILTER)
+        self.render()
+
+    def revive_task(self, task_id):
+        task = self.store.get(task_id)
+        if not task or not task.is_dropped():
+            return
+        task.revive()
+        task.sync_completion_state()
+        self.store.save()
+        target = "Complete" if task.is_complete() else (WATCHLIST_FILTER if task.is_to_watch() else CURRENT_FILTER)
+        self.filter_var.set(target)
         self.render()
 
     def delete_task(self, task_id):

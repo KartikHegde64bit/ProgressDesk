@@ -12,11 +12,12 @@ python task_tracker.py
 
 ## What It Tracks
 
-- A left sidebar with Current, To Watch, Movies, Series, and other project views.
+- A left sidebar with Current, To Watch, Dropped, Movies, Series, and other project views.
 - A Task Sets tab for deadline-style bundles such as weekend plans, job applications, or problem-solving goals.
 - A search bar with a `Search here` placeholder for quick filtering.
 - A Current tab for items you have started or made progress on.
 - A To Watch tab for untouched movie and series items.
+- A Dropped tab for paused items you do not want in your active views, with one-click revive.
 - Progress as completed units out of total units.
 - Remaining time based on the estimated hours you enter.
 - Active time spent with a start/pause timer.
